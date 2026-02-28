@@ -70,14 +70,12 @@ pub fn is_update_command(cmd: &str) -> bool {
 pub struct UpdateCheckInfo {
     pub current_version: String,
     pub latest_version: Option<String>,
-    pub is_homebrew: bool,
     pub policy: UpdatePolicy,
 }
 
 /// Perform a full update check and return structured info for display.
 pub async fn check_for_updates() -> UpdateCheckInfo {
     let current_version = version::CURRENT_VERSION.to_string();
-    let is_homebrew = updater::is_homebrew_install();
 
     let (policy, latest) = tokio::join!(
         policy::fetch_policy(POLICY_CHECK_TIMEOUT),
@@ -87,7 +85,6 @@ pub async fn check_for_updates() -> UpdateCheckInfo {
     UpdateCheckInfo {
         current_version,
         latest_version: latest.map(|v| v.to_string()),
-        is_homebrew,
         policy,
     }
 }

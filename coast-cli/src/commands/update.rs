@@ -43,11 +43,7 @@ async fn execute_check() -> Result<()> {
                     "\n{}",
                     format!("Update available: {} -> {}", info.current_version, latest).yellow()
                 );
-                if info.is_homebrew {
-                    println!("  Run: {}", "brew upgrade coast".bold());
-                } else {
-                    println!("  Run: {}", "coast update apply".bold());
-                }
+                println!("  Run: {}", "coast update apply".bold());
             }
         }
         None => {
@@ -61,25 +57,10 @@ async fn execute_check() -> Result<()> {
 
     println!("  {} {}", "policy:".bold(), info.policy.policy);
 
-    if info.is_homebrew {
-        println!(
-            "\n{} Installed via Homebrew — use {} to update.",
-            "note:".cyan().bold(),
-            "brew upgrade coast".bold()
-        );
-    }
-
     Ok(())
 }
 
 async fn execute_apply() -> Result<()> {
-    if coast_update::updater::is_homebrew_install() {
-        anyhow::bail!(
-            "This binary was installed via Homebrew.\n\
-             Run `brew upgrade coast` instead."
-        );
-    }
-
     println!("Checking for updates...");
 
     let latest = coast_update::checker::check_latest_version(coast_update::DOWNLOAD_TIMEOUT).await;

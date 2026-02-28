@@ -19,9 +19,6 @@ pub enum UpdateError {
     #[error("Failed to apply update: {0}")]
     ApplyFailed(String),
 
-    #[error("This binary was installed via Homebrew. Run `brew upgrade coast` instead.")]
-    HomebrewInstall,
-
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -46,9 +43,6 @@ mod tests {
             reason: "not semver".into(),
         };
         assert!(err.to_string().contains("abc"));
-
-        let err = UpdateError::HomebrewInstall;
-        assert!(err.to_string().contains("brew upgrade"));
 
         let err = UpdateError::DownloadFailed("404".into());
         assert!(err.to_string().contains("404"));
