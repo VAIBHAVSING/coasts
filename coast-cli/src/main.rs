@@ -340,18 +340,10 @@ async fn main() -> Result<()> {
     if let Some(coast_update::policy::PolicyAction::AutoUpdate {
         current,
         latest,
-        message,
+        message: _,
     }) = &policy_action
     {
-        if coast_update::updater::is_homebrew_install() {
-            // Can't self-update a Homebrew install — fall through to nudge-like behavior
-            eprintln!(
-                "\n{}",
-                colored::Colorize::dimmed(
-                    coast_update::format_nudge_message(current, latest, message).as_str()
-                )
-            );
-        } else if let Ok(latest_ver) = coast_update::version::parse_version(latest) {
+        if let Ok(latest_ver) = coast_update::version::parse_version(latest) {
             eprintln!(
                 "{} Updating coast {} -> {} ...",
                 colored::Colorize::bold(colored::Colorize::cyan("auto-update:")),

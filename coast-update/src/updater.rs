@@ -4,17 +4,6 @@ use semver::Version;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// Detect if the current binary was installed via Homebrew.
-///
-/// Checks if the executable path contains `/Cellar/` or `/opt/homebrew/`.
-pub fn is_homebrew_install() -> bool {
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    let path_str = exe.to_string_lossy();
-    path_str.contains("/Cellar/") || path_str.contains("/opt/homebrew/")
-}
-
 /// Find the `coastd` binary path, using the same resolution logic as the CLI.
 ///
 /// Looks for `coastd` next to the current `coast` executable first,
@@ -58,10 +47,6 @@ pub async fn download_release(
     version: &Version,
     timeout: Duration,
 ) -> Result<PathBuf, UpdateError> {
-    if is_homebrew_install() {
-        return Err(UpdateError::HomebrewInstall);
-    }
-
     let (os, arch) = current_platform();
     let url = crate::checker::release_tarball_url(version, os, arch);
 
@@ -276,12 +261,5 @@ mod tests {
     fn test_apply_update_missing_tarball() {
         let result = apply_update(Path::new("/nonexistent/coast.tar.gz"));
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_is_homebrew_install_not_homebrew() {
-        // In dev/test environments, the binary won't be under /Cellar/ or /opt/homebrew/
-        // This is a best-effort test — we just verify it returns a bool without panicking
-        let _result = is_homebrew_install();
     }
 }
