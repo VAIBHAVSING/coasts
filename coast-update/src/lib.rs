@@ -37,11 +37,36 @@ pub async fn enforce_update_policy(timeout: Duration) -> PolicyAction {
     policy::evaluate_policy(&policy_result, &current, latest.as_ref())
 }
 
+/// Build the update command string, prefixing with `sudo` if the install
+/// directory is not writable by the current user.
+fn update_command() -> String {
+    let needs_sudo = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .is_some_and(|dir| {
+            // Try creating a temp file in the install directory
+            let probe = dir.join(".coast-write-probe");
+            if std::fs::File::create(&probe).is_ok() {
+                let _ = std::fs::remove_file(&probe);
+                false
+            } else {
+                true
+            }
+        });
+
+    if needs_sudo {
+        "sudo coast update apply".to_string()
+    } else {
+        "coast update apply".to_string()
+    }
+}
+
 /// Format a nudge message for display after command execution.
 pub fn format_nudge_message(current: &str, latest: &str, custom_message: &str) -> String {
+    let cmd = update_command();
     let mut msg = format!(
         "A new version of coast is available: {current} -> {latest}\n\
-         Run `coast update apply` to update."
+         Run `{cmd}` to update."
     );
     if !custom_message.is_empty() {
         msg.push_str(&format!("\n{custom_message}"));
@@ -51,9 +76,10 @@ pub fn format_nudge_message(current: &str, latest: &str, custom_message: &str) -
 
 /// Format a required-update message for display before blocking execution.
 pub fn format_required_message(current: &str, minimum: &str, custom_message: &str) -> String {
+    let cmd = update_command();
     let mut msg = format!(
         "coast v{current} is no longer supported. Minimum required version: v{minimum}\n\
-         Run `coast update apply` to update."
+         Run `{cmd}` to update."
     );
     if !custom_message.is_empty() {
         msg.push_str(&format!("\n{custom_message}"));
