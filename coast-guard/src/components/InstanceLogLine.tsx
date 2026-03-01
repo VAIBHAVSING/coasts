@@ -1,10 +1,6 @@
 import type { ReactNode } from 'react';
 import { TIMESTAMP_RE, LEVEL_RE, LEVEL_STYLES, highlightText } from '../lib/log-rendering';
-
-const SERVICE_COLORS = [
-  '#3b82f6', '#8b5cf6', '#06b6d4', '#f97316', '#ec4899',
-  '#10b981', '#f59e0b', '#6366f1', '#14b8a6', '#e11d48',
-];
+import { SERVICE_COLORS } from '../lib/chart-colors';
 
 export function getServiceColor(service: string): string {
   let hash = 0;
@@ -36,7 +32,7 @@ export function renderInstanceLogLine(parsed: ParsedLine, idx: number, highlight
   if (parsed.service != null) {
     const c = getServiceColor(parsed.service);
     elements.push(
-      <span key={`s${idx}`} className="inline-block mr-2 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: c + '20', color: c }}>
+      <span key={`s${idx}`} className="inline-block mr-2 px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: `color-mix(in srgb, ${c} 12%, transparent)`, color: c }}>
         {parsed.service}
       </span>,
     );

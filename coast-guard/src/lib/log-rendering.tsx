@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
 
 export const ANSI_MAP: Record<string, string> = {
-  '30': 'color:var(--text-subtle)', '31': 'color:#ef4444', '32': 'color:#22c55e',
-  '33': 'color:#eab308', '34': 'color:#3b82f6', '35': 'color:#a855f7',
-  '36': 'color:#06b6d4', '37': 'color:var(--text)', '90': 'color:var(--text-subtle)',
-  '91': 'color:#f87171', '92': 'color:#4ade80', '93': 'color:#facc15',
-  '94': 'color:#60a5fa', '95': 'color:#c084fc', '96': 'color:#22d3ee',
+  '30': 'color:var(--text-subtle)', '31': 'color:var(--ansi-red)', '32': 'color:var(--ansi-green)',
+  '33': 'color:var(--ansi-yellow)', '34': 'color:var(--ansi-blue)', '35': 'color:var(--ansi-magenta)',
+  '36': 'color:var(--ansi-cyan)', '37': 'color:var(--text)', '90': 'color:var(--text-subtle)',
+  '91': 'color:var(--ansi-bright-red)', '92': 'color:var(--ansi-bright-green)', '93': 'color:var(--ansi-bright-yellow)',
+  '94': 'color:var(--ansi-bright-blue)', '95': 'color:var(--ansi-bright-magenta)', '96': 'color:var(--ansi-bright-cyan)',
   '97': 'color:var(--text)', '1': 'font-weight:700', '2': 'opacity:0.6',
   '3': 'font-style:italic', '4': 'text-decoration:underline',
 };

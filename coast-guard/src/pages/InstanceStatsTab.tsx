@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProjectName, InstanceName } from '../types/branded';
 import type { ContainerStats } from '../types/api';
 import StatsChart, { type StatsPoint as ChartPoint } from '../components/StatsChart';
+import { CHART_COLORS } from '../lib/chart-colors';
 
 interface Props {
   readonly project: ProjectName;
@@ -134,7 +135,7 @@ export default function InstanceStatsTab({ project, name }: Props) {
           <div className="flex-1 min-h-0">
             <StatsChart 
               data={cpuData} 
-              color="#3b82f6" 
+              color={CHART_COLORS.cpu} 
               label="CPU" 
               formatY={(v) => `${v.toFixed(0)}%`} 
             />
@@ -149,7 +150,7 @@ export default function InstanceStatsTab({ project, name }: Props) {
           <div className="flex-1 min-h-0">
             <StatsChart 
               data={memData} 
-              color="#8b5cf6" 
+              color={CHART_COLORS.memory} 
               label={t('stats.memUsed')} 
               formatY={formatBytes} 
             />
@@ -164,9 +165,9 @@ export default function InstanceStatsTab({ project, name }: Props) {
           <div className="flex-1 min-h-0">
             <StatsChart 
               data={diskData} 
-              color="#06b6d4" 
+              color={CHART_COLORS.diskRead} 
               label={t('stats.diskRead')}
-              color2="#f97316"
+              color2={CHART_COLORS.diskWrite}
               label2={t('stats.diskWrite')}
               formatY={formatBytes}
             />
@@ -181,9 +182,9 @@ export default function InstanceStatsTab({ project, name }: Props) {
           <div className="flex-1 min-h-0">
             <StatsChart 
               data={netData} 
-              color="#3b82f6" 
+              color={CHART_COLORS.netRx} 
               label={t('stats.netRx')}
-              color2="#f97316"
+              color2={CHART_COLORS.netTx}
               label2={t('stats.netTx')}
               formatY={formatBytes}
             />

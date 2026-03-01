@@ -51,6 +51,37 @@
     --danger-strong: #dc2626;
     
     --focus-ring: rgba(59, 130, 246, 0.5);
+
+    --chart-cpu: #3b82f6;
+    --chart-memory: #8b5cf6;
+    --chart-disk-read: #06b6d4;
+    --chart-disk-write: #f97316;
+    --chart-net-rx: #3b82f6;
+    --chart-net-tx: #f97316;
+
+    --ansi-red: #ef4444;
+    --ansi-green: #22c55e;
+    --ansi-yellow: #eab308;
+    --ansi-blue: #3b82f6;
+    --ansi-magenta: #a855f7;
+    --ansi-cyan: #06b6d4;
+    --ansi-bright-red: #f87171;
+    --ansi-bright-green: #4ade80;
+    --ansi-bright-yellow: #facc15;
+    --ansi-bright-blue: #60a5fa;
+    --ansi-bright-magenta: #c084fc;
+    --ansi-bright-cyan: #22d3ee;
+
+    --service-color-1: #3b82f6;
+    --service-color-2: #8b5cf6;
+    --service-color-3: #06b6d4;
+    --service-color-4: #f97316;
+    --service-color-5: #ec4899;
+    --service-color-6: #10b981;
+    --service-color-7: #f59e0b;
+    --service-color-8: #6366f1;
+    --service-color-9: #14b8a6;
+    --service-color-10: #e11d48;
   }
 
   [data-theme="dark"] {
@@ -76,6 +107,37 @@
     --danger-strong: #ef4444;
     
     --focus-ring: rgba(79, 124, 247, 0.45);
+
+    --chart-cpu: #3b82f6;
+    --chart-memory: #8b5cf6;
+    --chart-disk-read: #06b6d4;
+    --chart-disk-write: #f97316;
+    --chart-net-rx: #3b82f6;
+    --chart-net-tx: #f97316;
+
+    --ansi-red: #ef4444;
+    --ansi-green: #22c55e;
+    --ansi-yellow: #eab308;
+    --ansi-blue: #3b82f6;
+    --ansi-magenta: #a855f7;
+    --ansi-cyan: #06b6d4;
+    --ansi-bright-red: #f87171;
+    --ansi-bright-green: #4ade80;
+    --ansi-bright-yellow: #facc15;
+    --ansi-bright-blue: #60a5fa;
+    --ansi-bright-magenta: #c084fc;
+    --ansi-bright-cyan: #22d3ee;
+
+    --service-color-1: #3b82f6;
+    --service-color-2: #8b5cf6;
+    --service-color-3: #06b6d4;
+    --service-color-4: #f97316;
+    --service-color-5: #ec4899;
+    --service-color-6: #10b981;
+    --service-color-7: #f59e0b;
+    --service-color-8: #6366f1;
+    --service-color-9: #14b8a6;
+    --service-color-10: #e11d48;
   }
 
   html, body, #root {

@@ -113,9 +113,11 @@ export default function StatsChart({
     // Clipped content
     const content = g.append('g').attr('clip-path', `url(#${clipId})`);
 
+    let seriesIdx = 0;
     const drawSeries = (acc: (d: StatsPoint) => number, seriesColor: string) => {
+      const gradId = `grad-${clipId}-${seriesIdx++}`;
       const gradient = svg.select('defs').append('linearGradient')
-        .attr('id', `grad-${seriesColor.slice(1)}-${clipId}`)
+        .attr('id', gradId)
         .attr('x1', '0%').attr('y1', '0%')
         .attr('x2', '0%').attr('y2', '100%');
       gradient.append('stop').attr('offset', '0%').attr('stop-color', seriesColor).attr('stop-opacity', 0.25);
@@ -130,7 +132,7 @@ export default function StatsChart({
       content.append('path')
         .datum(data)
         .attr('d', area)
-        .attr('fill', `url(#grad-${seriesColor.slice(1)}-${clipId})`);
+        .attr('fill', `url(#${gradId})`);
 
       const line = d3.line<StatsPoint>()
         .x((d) => zoomedX(d.time))

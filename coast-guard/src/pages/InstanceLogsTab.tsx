@@ -159,7 +159,7 @@ export default function InstanceLogsTab({ project, name }: Props) {
           value={serviceFilter}
           onChange={(e) => setServiceFilter(e.target.value)}
           className="h-7 pl-3 pr-8 text-xs font-mono rounded-md bg-transparent border border-[var(--border)] text-main outline-none appearance-none bg-[length:12px_12px] bg-[position:right_8px_center] bg-no-repeat"
-          style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' fill='none' stroke='%2394a3b8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")" }}
+          style={{ backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5L6 7.5L9 4.5' fill='none' stroke='currentColor' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\")" }}
         >
           <option value="*">{t('logs.allServices')}</option>
           {services.map((s) => (
