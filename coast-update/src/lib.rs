@@ -42,7 +42,7 @@ pub async fn enforce_update_policy(timeout: Duration) -> PolicyAction {
 fn update_command() -> String {
     let needs_sudo = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
         .is_some_and(|dir| {
             // Try creating a temp file in the install directory
             let probe = dir.join(".coast-write-probe");
