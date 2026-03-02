@@ -144,15 +144,25 @@ pub fn apply_update(tarball_path: &Path) -> Result<(), UpdateError> {
     Ok(())
 }
 
-/// Replace a single binary atomically using rename.
+/// Replace a single binary atomically using rename, falling back to sudo cp
+/// when the install directory is not writable.
 fn replace_binary(new_path: &Path, target_path: &Path) -> Result<(), UpdateError> {
     let backup = target_path.with_extension("old");
 
     // Move current binary out of the way
     if target_path.exists() {
-        std::fs::rename(target_path, &backup).map_err(|e| {
-            UpdateError::ApplyFailed(format!("Failed to backup {}: {e}", target_path.display()))
-        })?;
+        match std::fs::rename(target_path, &backup) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                return sudo_copy(new_path, target_path);
+            }
+            Err(e) => {
+                return Err(UpdateError::ApplyFailed(format!(
+                    "Failed to backup {}: {e}",
+                    target_path.display()
+                )));
+            }
+        }
     }
 
     // Move new binary into place
@@ -176,6 +186,42 @@ fn replace_binary(new_path: &Path, target_path: &Path) -> Result<(), UpdateError
 
     // Remove backup
     let _ = std::fs::remove_file(&backup);
+
+    Ok(())
+}
+
+/// Copy a binary into place using sudo, prompting the user for their password.
+fn sudo_copy(new_path: &Path, target_path: &Path) -> Result<(), UpdateError> {
+    eprintln!("sudo access required to update {}", target_path.display());
+
+    let status = std::process::Command::new("sudo")
+        .args(["cp", "-f"])
+        .arg(new_path)
+        .arg(target_path)
+        .status()
+        .map_err(|e| UpdateError::ApplyFailed(format!("Failed to run sudo: {e}")))?;
+
+    if !status.success() {
+        return Err(UpdateError::ApplyFailed(format!(
+            "sudo cp failed for {}",
+            target_path.display()
+        )));
+    }
+
+    // Ensure correct permissions
+    let chmod_status = std::process::Command::new("sudo")
+        .args(["chmod", "755"])
+        .arg(target_path)
+        .status();
+
+    if let Ok(s) = chmod_status {
+        if !s.success() {
+            eprintln!(
+                "warning: failed to set permissions on {}",
+                target_path.display()
+            );
+        }
+    }
 
     Ok(())
 }
