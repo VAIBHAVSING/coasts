@@ -7,6 +7,7 @@ import { useCoastEvents } from '../hooks/useWebSocket';
 import { useDockerInfo, useOpenDockerSettingsMutation } from '../hooks/useDockerInfo';
 import { formatBytes } from '../lib/formatBytes';
 import LanguagePicker from './LanguagePicker';
+import UpdateButton from './UpdateButton';
 import DockerIcon from './DockerIcon';
 import logoUrl from '../../assets/coastguard_logo.svg';
 
@@ -54,6 +55,7 @@ export default function Layout() {
                 <span className="font-medium">{t('docker.notRunning')}</span>
               </span>
             )}
+            <UpdateButton />
             <LanguagePicker />
             <button
               onClick={toggle}
