@@ -85,23 +85,29 @@ find the relevant documentation.
 
 ## Adding the Skill to Your Agent
 
-How you add this depends on your agent:
+The fastest way is to let the agent set itself up. Run one of these from your project directory:
 
-### Claude Code
+```sh
+# Claude Code
+claude -p "$(coast skills-prompt)"
 
-Add the skill text to your project's `CLAUDE.md` file, or create a dedicated section for it.
+# Codex
+codex "$(coast skills-prompt)"
 
-### Codex
+# Cursor (from terminal)
+cursor --chat "$(coast skills-prompt)"
+```
 
-Add the skill text to your project's `AGENTS.md` file.
+This gives the agent the skill text and instructions to write it to its own config file (`CLAUDE.md`, `AGENTS.md`, `.cursor/rules/coast.md`, etc.).
 
-### Cursor
+### Manual setup
 
-Create a rules file at `.cursor/rules/coast.mdc` (or `.cursor/rules/coast.md`) in your project root and paste the skill text above.
+If you prefer to add the skill yourself:
 
-### Other agents
-
-Most agents support some form of project-level prompt or rules file. Paste the skill text into whatever your agent reads at session start.
+- **Claude Code:** Add the skill text to your project's `CLAUDE.md` file.
+- **Codex:** Add the skill text to your project's `AGENTS.md` file.
+- **Cursor:** Create `.cursor/rules/coast.md` in your project root and paste the skill text.
+- **Other agents:** Paste the skill text into whatever project-level prompt or rules file your agent reads at startup.
 
 ## Further Reading
 

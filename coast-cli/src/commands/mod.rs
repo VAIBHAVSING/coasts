@@ -30,6 +30,7 @@ pub mod run;
 pub mod search_docs;
 pub mod secret;
 pub mod shared;
+pub mod skills_prompt;
 pub mod start;
 pub mod stop;
 pub mod ui;

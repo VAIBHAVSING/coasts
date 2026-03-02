@@ -55,6 +55,9 @@ pub enum Commands {
     /// Print the Coastfile installation prompt for AI coding agents.
     #[command(name = "installation-prompt")]
     InstallationPrompt(commands::installation_prompt::InstallationPromptArgs),
+    /// Print the Coast runtime skills prompt for AI coding agents.
+    #[command(name = "skills-prompt")]
+    SkillsPrompt(commands::skills_prompt::SkillsPromptArgs),
 
     // --- Project-explicit commands (project as positional arg or self-resolved) ---
     /// Build a coast image from a Coastfile.
@@ -242,6 +245,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Docs(args) => commands::docs::execute(&args).await,
         Commands::SearchDocs(args) => commands::search_docs::execute(&args).await,
         Commands::InstallationPrompt(args) => commands::installation_prompt::execute(&args).await,
+        Commands::SkillsPrompt(args) => commands::skills_prompt::execute(&args).await,
 
         // --- Project-explicit commands ---
         Commands::Build(args) => commands::build::execute(&args).await,
@@ -592,6 +596,12 @@ mod tests {
     fn test_cli_installation_prompt_subcommand() {
         let cli = Cli::try_parse_from(["coast", "installation-prompt"]).unwrap();
         assert!(matches!(cli.command, Commands::InstallationPrompt(_)));
+    }
+
+    #[test]
+    fn test_cli_skills_prompt_subcommand() {
+        let cli = Cli::try_parse_from(["coast", "skills-prompt"]).unwrap();
+        assert!(matches!(cli.command, Commands::SkillsPrompt(_)));
     }
 
     #[test]
