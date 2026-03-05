@@ -8,7 +8,7 @@ rust_i18n::i18n!("../coast-i18n/locales", fallback = "en");
 use std::sync::Arc;
 
 use clap::Parser;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use coast_core::error::Result;
@@ -57,6 +57,7 @@ struct Cli {
 
 /// Main entry point for the coast daemon. Call this from your binary's main().
 pub fn run() {
+    ensure_host_tool_paths();
     let cli = Cli::parse();
 
     if cli.foreground {
@@ -66,6 +67,63 @@ pub fn run() {
         // Daemonize: fork, setsid, then run
         daemonize(cli);
     }
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_host_tool_paths() {
+    let current_path = std::env::var_os("PATH");
+    let existing_entries: Vec<std::path::PathBuf> = current_path
+        .as_ref()
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default();
+
+    let updated_entries = extend_path_entries(
+        existing_entries.clone(),
+        macos_host_tool_candidates()
+            .iter()
+            .map(std::path::PathBuf::from)
+            .filter(|path| path.is_dir()),
+    );
+
+    if updated_entries == existing_entries {
+        return;
+    }
+
+    match std::env::join_paths(&updated_entries) {
+        Ok(path) => {
+            unsafe {
+                std::env::set_var("PATH", &path);
+            }
+            debug!(path = %path.to_string_lossy(), "updated PATH with macOS host tool directories");
+        }
+        Err(error) => {
+            warn!(error = %error, "failed to join augmented PATH entries");
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn ensure_host_tool_paths() {}
+
+fn extend_path_entries<I>(
+    mut existing_entries: Vec<std::path::PathBuf>,
+    candidates: I,
+) -> Vec<std::path::PathBuf>
+where
+    I: IntoIterator<Item = std::path::PathBuf>,
+{
+    for candidate in candidates {
+        if !existing_entries.iter().any(|entry| entry == &candidate) {
+            existing_entries.push(candidate);
+        }
+    }
+
+    existing_entries
+}
+
+#[cfg(target_os = "macos")]
+fn macos_host_tool_candidates() -> &'static [&'static str] {
+    &["/opt/homebrew/bin", "/usr/local/bin"]
 }
 
 /// Daemonize the process using fork + setsid.
@@ -755,6 +813,30 @@ mod tests {
         let cli = Cli::parse_from(["coastd"]);
         assert!(!cli.foreground);
         assert!(cli.socket.is_none());
+    }
+
+    #[test]
+    fn test_extend_path_entries_appends_only_missing_candidates() {
+        let existing = vec![
+            std::path::PathBuf::from("/usr/bin"),
+            std::path::PathBuf::from("/bin"),
+        ];
+        let updated = extend_path_entries(
+            existing,
+            [
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+                std::path::PathBuf::from("/usr/bin"),
+            ],
+        );
+
+        assert_eq!(
+            updated,
+            vec![
+                std::path::PathBuf::from("/usr/bin"),
+                std::path::PathBuf::from("/bin"),
+                std::path::PathBuf::from("/opt/homebrew/bin"),
+            ]
+        );
     }
 
     fn make_test_instance(
