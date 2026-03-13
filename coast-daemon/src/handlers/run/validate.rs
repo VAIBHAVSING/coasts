@@ -244,7 +244,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_allows_same_name_in_different_projects() {
+    async fn test_validate_allows_same_name_in_different_projects_before_provisioning() {
         let db = StateDb::open_in_memory().unwrap();
         let state = AppState::new_for_testing(db);
         let progress = discard_progress();
@@ -278,8 +278,14 @@ mod tests {
             .unwrap();
 
         let db = state.db.lock().await;
-        assert!(db.get_instance("project-a", "main").unwrap().is_some());
-        assert!(db.get_instance("project-b", "main").unwrap().is_some());
+        assert!(
+            db.get_instance("project-a", "main").unwrap().is_some(),
+            "cross-project name reuse should remain valid at the validation layer"
+        );
+        assert!(
+            db.get_instance("project-b", "main").unwrap().is_some(),
+            "cross-project name reuse should remain valid at the validation layer"
+        );
     }
 
     #[tokio::test]

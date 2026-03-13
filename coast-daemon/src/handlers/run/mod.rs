@@ -289,9 +289,14 @@ mod tests {
     use super::*;
     use crate::state::StateDb;
     use coast_core::error::CoastError;
+    use coast_core::types::{CoastInstance, InstanceStatus, RuntimeType};
 
     fn test_state() -> AppState {
         AppState::new_for_testing(StateDb::open_in_memory().unwrap())
+    }
+
+    fn test_state_with_docker() -> AppState {
+        AppState::new_for_testing_with_docker(StateDb::open_in_memory().unwrap())
     }
 
     #[tokio::test]
@@ -316,6 +321,48 @@ mod tests {
         let db = state.db.lock().await;
         let instance = db.get_instance("my-app", "feature-oauth").unwrap();
         assert!(instance.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_run_with_docker_stub_rejects_duplicate_instance() {
+        let state = test_state_with_docker();
+        {
+            let db = state.db.lock().await;
+            db.insert_instance(&CoastInstance {
+                name: "dup".to_string(),
+                project: "my-app".to_string(),
+                status: InstanceStatus::Running,
+                branch: None,
+                commit_sha: None,
+                container_id: Some("existing-container".to_string()),
+                runtime: RuntimeType::Dind,
+                created_at: chrono::Utc::now(),
+                worktree_name: None,
+                build_id: None,
+                coastfile_type: None,
+            })
+            .unwrap();
+        }
+
+        let req = RunRequest {
+            name: "dup".to_string(),
+            project: "my-app".to_string(),
+            branch: None,
+            commit_sha: None,
+            worktree: None,
+            build_id: None,
+            coastfile_type: None,
+            force_remove_dangling: false,
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+        let result = handle(req, &state, tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("already exists"));
+
+        let db = state.db.lock().await;
+        let instance = db.get_instance("my-app", "dup").unwrap().unwrap();
+        assert_eq!(instance.status, InstanceStatus::Running);
     }
 
     #[test]

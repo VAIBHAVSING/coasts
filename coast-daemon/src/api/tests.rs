@@ -28,6 +28,11 @@ mod tests {
         Arc::new(AppState::new_for_testing(db))
     }
 
+    fn test_state_with_docker() -> Arc<AppState> {
+        let db = StateDb::open_in_memory().unwrap();
+        Arc::new(AppState::new_for_testing_with_docker(db))
+    }
+
     fn make_instance(project: &str, name: &str, build_id: Option<String>) -> CoastInstance {
         CoastInstance {
             name: name.to_string(),
@@ -1285,7 +1290,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stream_run_duplicate_instance() {
-        let state = test_state();
+        let state = test_state_with_docker();
         {
             let db = state.db.lock().await;
             db.insert_instance(&make_instance("dup-proj", "dup-inst", None))
@@ -1319,6 +1324,14 @@ mod tests {
         assert!(
             body_str.contains("event: error"),
             "Expected SSE error event in body: {body_str}"
+        );
+        assert!(
+            body_str.contains("already exists"),
+            "Expected duplicate-instance error in body: {body_str}"
+        );
+        assert!(
+            !body_str.contains("Host Docker is not available"),
+            "Expected duplicate-instance error, not missing-Docker error: {body_str}"
         );
     }
 
