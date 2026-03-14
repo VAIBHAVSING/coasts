@@ -1191,6 +1191,193 @@ args = ["-y", "@upstash/context7-mcp"]
 }
 
 #[test]
+fn test_standalone_toml_omits_empty_optional_sections() {
+    let dir = tempfile::tempdir().unwrap();
+    let coastfile = Coastfile::parse(
+        r#"
+[coast]
+name = "minimal"
+"#,
+        dir.path(),
+    )
+    .unwrap();
+
+    let standalone = coastfile.to_standalone_toml();
+
+    assert!(standalone.contains("[coast]"));
+    assert!(standalone.contains("runtime = \"dind\""));
+    assert!(standalone.contains("worktree_dir = \".worktrees\""));
+    assert!(standalone.contains("\n[assign]\ndefault = \"restart\"\n"));
+    assert!(!standalone.contains("compose = "));
+    assert!(!standalone.contains("primary_port = "));
+    assert!(!standalone.contains("autostart = false"));
+    assert!(!standalone.contains("[coast.setup]"));
+    assert!(!standalone.contains("[ports]"));
+    assert!(!standalone.contains("[healthcheck]"));
+    assert!(!standalone.contains("[shared_services."));
+    assert!(!standalone.contains("[volumes."));
+    assert!(!standalone.contains("[secrets."));
+    assert!(!standalone.contains("[egress]"));
+    assert!(!standalone.contains("[omit]"));
+    assert!(!standalone.contains("[mcp."));
+    assert!(!standalone.contains("[services."));
+    assert!(!standalone.contains("[agent_shell]"));
+    assert!(!standalone.contains("[mcp_clients."));
+}
+
+#[test]
+fn test_standalone_toml_sorts_ports_healthcheck_and_egress() {
+    let dir = tempfile::tempdir().unwrap();
+    let coastfile = Coastfile::parse(
+        r#"
+[coast]
+name = "sorted"
+compose = "./docker-compose.yml"
+
+[ports]
+web = 3000
+api = 8080
+postgres = 5432
+
+[healthcheck]
+web = "/"
+api = "/healthz"
+
+[egress]
+postgres = 5432
+host-api = 48080
+"#,
+        dir.path(),
+    )
+    .unwrap();
+
+    let standalone = coastfile.to_standalone_toml();
+
+    assert!(standalone.contains("\n[ports]\napi = 8080\npostgres = 5432\nweb = 3000\n"));
+    assert!(standalone.contains("\n[healthcheck]\napi = \"/healthz\"\nweb = \"/\"\n"));
+    assert!(standalone.contains("\n[egress]\nhost-api = 48080\npostgres = 5432\n"));
+}
+
+#[test]
+fn test_standalone_toml_preserves_coast_fields_and_relative_compose() {
+    let dir = tempfile::tempdir().unwrap();
+    let coastfile = Coastfile::parse(
+        r#"
+[coast]
+name = "my-app"
+compose = "./infra/docker-compose.yml"
+worktree_dir = ".custom-worktrees"
+autostart = false
+primary_port = "web"
+
+[ports]
+web = 3000
+"#,
+        dir.path(),
+    )
+    .unwrap();
+
+    let standalone = coastfile.to_standalone_toml();
+
+    assert!(standalone.contains("compose = \"./infra/docker-compose.yml\""));
+    assert!(standalone.contains("worktree_dir = \".custom-worktrees\""));
+    assert!(standalone.contains("autostart = false"));
+    assert!(standalone.contains("primary_port = \"web\""));
+
+    let reparsed = Coastfile::parse(&standalone, dir.path()).unwrap();
+    assert_eq!(
+        reparsed.compose,
+        Some(dir.path().join("./infra/docker-compose.yml"))
+    );
+    assert_eq!(reparsed.worktree_dir, ".custom-worktrees");
+    assert!(!reparsed.autostart);
+    assert_eq!(reparsed.primary_port.as_deref(), Some("web"));
+}
+
+#[test]
+fn test_standalone_toml_roundtrip_with_advanced_mcp_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let coastfile = Coastfile::parse(
+        r#"
+[coast]
+name = "my-app"
+
+[mcp.host-db]
+proxy = "host"
+command = "npx"
+args = ["-y", "@mcp/server-postgres"]
+
+[mcp.custom-tool]
+source = "./tools/my-mcp"
+install = "npm install"
+command = "node"
+args = ["dist/index.js"]
+
+[mcp_clients.my-fork]
+format = "claude-code"
+config_path = "/workspace/.my-fork/mcp.json"
+
+[mcp_clients.exotic]
+run = "custom-mcp-sync"
+"#,
+        dir.path(),
+    )
+    .unwrap();
+
+    let standalone = coastfile.to_standalone_toml();
+    assert!(standalone.contains("[mcp.host-db]"));
+    assert!(standalone.contains("proxy = \"host\""));
+    assert!(standalone.contains("source = \"./tools/my-mcp\""));
+    assert!(standalone.contains("install = \"npm install\""));
+    assert!(standalone.contains("[mcp_clients.my-fork]"));
+    assert!(standalone.contains("format = \"claude-code\""));
+    assert!(standalone.contains("config_path = \"/workspace/.my-fork/mcp.json\""));
+    assert!(standalone.contains("[mcp_clients.exotic]"));
+    assert!(standalone.contains("run = \"custom-mcp-sync\""));
+
+    let reparsed = Coastfile::parse(&standalone, dir.path()).unwrap();
+    assert_eq!(reparsed.mcp_servers.len(), 2);
+    assert_eq!(reparsed.mcp_clients.len(), 2);
+
+    let host_db = reparsed
+        .mcp_servers
+        .iter()
+        .find(|server| server.name == "host-db")
+        .unwrap();
+    assert!(host_db.is_host_proxied());
+    assert_eq!(host_db.command.as_deref(), Some("npx"));
+
+    let custom_tool = reparsed
+        .mcp_servers
+        .iter()
+        .find(|server| server.name == "custom-tool")
+        .unwrap();
+    assert_eq!(custom_tool.source.as_deref(), Some("./tools/my-mcp"));
+    assert_eq!(custom_tool.install, vec!["npm install"]);
+
+    let my_fork = reparsed
+        .mcp_clients
+        .iter()
+        .find(|client| client.name == "my-fork")
+        .unwrap();
+    assert_eq!(
+        my_fork.format,
+        Some(crate::types::McpClientFormat::ClaudeCode)
+    );
+    assert_eq!(
+        my_fork.config_path.as_deref(),
+        Some("/workspace/.my-fork/mcp.json")
+    );
+
+    let exotic = reparsed
+        .mcp_clients
+        .iter()
+        .find(|client| client.name == "exotic")
+        .unwrap();
+    assert_eq!(exotic.run.as_deref(), Some("custom-mcp-sync"));
+}
+
+#[test]
 fn test_standalone_roundtrip_preserves_mapped_shared_service_ports() {
     let dir = tempfile::tempdir().unwrap();
     let coastfile = Coastfile::parse(
