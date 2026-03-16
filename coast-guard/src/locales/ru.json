@@ -513,6 +513,7 @@
   "docs.nav.coastfileMcp": "MCP-серверы и клиенты",
   "docs.nav.harnesses": "Интеграции",
   "docs.nav.harnessCodex": "Codex",
+  "docs.nav.harnessConductor": "Conductor",
   "docs.nav.recipes": "Рецепты",
   "docs.nav.recipesFullstackMonorepo": "Фулстек-монорепо"
 }

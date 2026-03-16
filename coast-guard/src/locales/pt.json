@@ -511,6 +511,7 @@
   "docs.nav.coastfileMcp": "Servidores e Clientes MCP",
   "docs.nav.harnesses": "Integrações",
   "docs.nav.harnessCodex": "Codex",
+  "docs.nav.harnessConductor": "Conductor",
   "docs.nav.recipes": "Receitas",
   "docs.nav.recipesFullstackMonorepo": "Monorepo Full-Stack"
 }

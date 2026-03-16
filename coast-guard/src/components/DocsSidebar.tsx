@@ -70,6 +70,7 @@ const DOC_TITLE_KEYS: Record<string, string> = {
   'coastfiles/MCP.md': 'docs.nav.coastfileMcp',
   'harnesses/README.md': 'docs.nav.harnesses',
   'harnesses/CODEX.md': 'docs.nav.harnessCodex',
+  'harnesses/CONDUCTOR.md': 'docs.nav.harnessConductor',
   'recipes/README.md': 'docs.nav.recipes',
   'recipes/FULLSTACK_MONOREPO.md': 'docs.nav.recipesFullstackMonorepo',
 };

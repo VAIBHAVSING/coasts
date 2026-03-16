@@ -3,7 +3,7 @@ README.md
 GETTING_STARTED.md
 SKILLS_FOR_HOST_AGENTS.md
 
-# Learn Coasts
+# 学习 Coasts
 learn-coasts-videos/README.md
 learn-coasts-videos/coasts.md
 learn-coasts-videos/ports.md
@@ -14,9 +14,10 @@ learn-coasts-videos/secrets.md
 learn-coasts-videos/getting-started.md
 learn-coasts-videos/coast-ui.md
 
-# Harnesses
+# Harness
 harnesses/README.md
 harnesses/CODEX.md
+harnesses/CONDUCTOR.md
 
 # 概念与术语
 concepts_and_terminology/README.md
@@ -45,7 +46,7 @@ concepts_and_terminology/MCP_SERVERS.md
 concepts_and_terminology/PERFORMANCE_OPTIMIZATIONS.md
 concepts_and_terminology/TROUBLESHOOTING.md
 
-# Coastfiles
+# Coastfile
 coastfiles/README.md
 coastfiles/PROJECT.md
 coastfiles/WORKTREE_DIR.md

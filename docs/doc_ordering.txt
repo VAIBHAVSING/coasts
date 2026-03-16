@@ -17,6 +17,7 @@ learn-coasts-videos/coast-ui.md
 # Harnesses
 harnesses/README.md
 harnesses/CODEX.md
+harnesses/CONDUCTOR.md
 
 # Concepts and Terminology
 concepts_and_terminology/README.md

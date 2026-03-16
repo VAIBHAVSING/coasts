@@ -6,4 +6,5 @@ Each page below covers the Coastfile configuration and any caveats specific to t
 
 | Harness | Worktree location | Page |
 |---------|-------------------|------|
+| Conductor | `~/conductor/workspaces/<project>` | [Conductor](CONDUCTOR.md) |
 | OpenAI Codex | `~/.codex/worktrees` | [Codex](CODEX.md) |

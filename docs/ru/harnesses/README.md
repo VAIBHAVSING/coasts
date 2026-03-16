@@ -1,9 +1,10 @@
-# Окружения
+# Harnesses
 
-Большинство окружений создают git worktree для параллельного выполнения задач. Эти worktree могут находиться внутри вашего проекта или полностью за его пределами. Массив Coast [`worktree_dir`](../coastfiles/WORKTREE_DIR.md) указывает, где их искать, включая внешние пути, такие как `~/.codex/worktrees`, которым требуются дополнительные bind mounts.
+Большинство harnesses создают git worktree, чтобы запускать задачи параллельно. Эти worktree могут находиться внутри вашего проекта или полностью вне его. Массив [`worktree_dir`](../coastfiles/WORKTREE_DIR.md) в Coast указывает, где их искать, включая внешние пути, такие как `~/.codex/worktrees`, для которых требуются дополнительные bind mounts.
 
-На каждой странице ниже описана конфигурация Coastfile и любые особенности, характерные для соответствующего окружения.
+На каждой странице ниже описаны конфигурация Coastfile и любые особенности, относящиеся именно к этому harness.
 
 | Harness | Worktree location | Page |
 |---------|-------------------|------|
+| Conductor | `~/conductor/workspaces/<project>` | [Conductor](CONDUCTOR.md) |
 | OpenAI Codex | `~/.codex/worktrees` | [Codex](CODEX.md) |

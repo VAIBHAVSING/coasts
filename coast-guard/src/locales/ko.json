@@ -526,6 +526,7 @@
   "docs.nav.coastfileMcp": "MCP 서버 및 클라이언트",
   "docs.nav.harnesses": "도구 연동",
   "docs.nav.harnessCodex": "Codex",
+  "docs.nav.harnessConductor": "Conductor",
   "docs.nav.recipes": "레시피",
   "docs.nav.recipesFullstackMonorepo": "풀스택 Monorepo"
 }

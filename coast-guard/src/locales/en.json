@@ -562,6 +562,7 @@
   "docs.nav.coastfileMcp": "MCP Servers & Clients",
   "docs.nav.harnesses": "Harnesses",
   "docs.nav.harnessCodex": "Codex",
+  "docs.nav.harnessConductor": "Conductor",
   "docs.nav.recipes": "Recipes",
   "docs.nav.recipesFullstackMonorepo": "Full-Stack Monorepo"
 }
