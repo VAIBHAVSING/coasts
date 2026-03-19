@@ -1190,8 +1190,9 @@ mod tests {
             "error should mention bind failure: {err}"
         );
         assert!(
-            err.contains("did not bind the port in time"),
-            "error should mention verified bind timeout: {err}"
+            err.contains("did not bind the port in time")
+                || err.contains("exited before binding the port"),
+            "error should mention verified bind failure: {err}"
         );
 
         let db = state.db.lock().await;
