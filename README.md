@@ -229,6 +229,8 @@ coast rm feature-x
 - [@dahyman91](https://github.com/dahyman91)
 - [@agustif](https://github.com/agustif)
 - [@clarkerican](https://github.com/clarkerican)
+- [@mukeshblackhat](https://github.com/mukeshblackhat)
+- [@gregpeden](https://github.com/GregPeden)
 
 ## Original History
 

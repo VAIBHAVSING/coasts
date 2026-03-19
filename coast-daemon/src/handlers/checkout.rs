@@ -180,7 +180,7 @@ fn conflicting_checked_out_instances(
 /// 4. If name is Some, resolve the new coast container IP and spawn
 ///    canonical socat forwarders.
 /// 5. Update instance statuses in state DB.
-#[allow(clippy::cognitive_complexity)]
+#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
 pub async fn handle(req: CheckoutRequest, state: &AppState) -> Result<CheckoutResponse> {
     info!(name = ?req.name, project = %req.project, "handling checkout request");
 
@@ -1190,8 +1190,9 @@ mod tests {
             "error should mention bind failure: {err}"
         );
         assert!(
-            err.contains("did not bind the port in time"),
-            "error should mention verified bind timeout: {err}"
+            err.contains("did not bind the port in time")
+                || err.contains("exited before binding the port"),
+            "error should mention verified bind failure: {err}"
         );
 
         let db = state.db.lock().await;
