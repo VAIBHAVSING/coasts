@@ -458,9 +458,17 @@ pub fn remove_checkout_bridge(project: &str, instance: &str) -> Result<()> {
     )))
 }
 
-#[allow(clippy::cognitive_complexity)]
 pub fn cleanup_orphaned_checkout_bridges() {
-    let Ok(output) = Command::new("docker")
+    let Some(ids) = list_orphaned_bridge_ids() else {
+        return;
+    };
+    force_remove_bridge_containers(&ids);
+}
+
+/// List container IDs of orphaned checkout bridge containers, or `None` if
+/// Docker is unavailable or no orphaned bridges exist.
+fn list_orphaned_bridge_ids() -> Option<Vec<String>> {
+    let output = Command::new("docker")
         .args([
             "ps",
             "-aq",
@@ -468,30 +476,32 @@ pub fn cleanup_orphaned_checkout_bridges() {
             &format!("label={CHECKOUT_BRIDGE_LABEL}"),
         ])
         .output()
-    else {
-        debug!("docker not available, skipping checkout bridge cleanup");
-        return;
-    };
+        .ok()?;
 
     if !output.status.success() {
         debug!("failed to list checkout bridge containers, skipping cleanup");
-        return;
+        return None;
     }
 
-    let ids = String::from_utf8_lossy(&output.stdout)
+    let ids: Vec<String> = String::from_utf8_lossy(&output.stdout)
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
+        .collect();
 
     if ids.is_empty() {
         debug!("no orphaned checkout bridge containers found");
-        return;
+        return None;
     }
 
+    Some(ids)
+}
+
+/// Force-remove checkout bridge containers by ID.
+fn force_remove_bridge_containers(ids: &[String]) {
     let mut args = vec!["rm".to_string(), "-f".to_string()];
-    args.extend(ids);
+    args.extend(ids.iter().cloned());
     match run_docker_command(&args) {
         Ok(result) if result.status.success() => {
             info!("Cleaned up orphaned checkout bridge containers from previous session");
