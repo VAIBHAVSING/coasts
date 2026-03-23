@@ -455,14 +455,14 @@ fn compute_start_mount_src(
         }
     }
 
-    // Phase 2: External worktree dirs (directory + branch match).
+    // Phase 2: External worktree dirs (directory + branch match, with glob expansion).
     if let Some(ref root) = project_root {
-        for (idx, dir) in worktree_dirs.iter().enumerate() {
-            if Coastfile::is_external_worktree_dir(dir) {
-                let resolved = Coastfile::resolve_worktree_dir(root, dir);
-                if let Some(mount) = find_external_wt_mount_src(root, &resolved, idx, wt) {
-                    return mount;
-                }
+        let expanded = Coastfile::resolve_external_worktree_dirs_expanded(&worktree_dirs, root);
+        for ext_dir in &expanded {
+            if let Some(mount) =
+                find_external_wt_mount_src(root, &ext_dir.resolved_path, ext_dir.mount_index, wt)
+            {
+                return mount;
             }
         }
     }

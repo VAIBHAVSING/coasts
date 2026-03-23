@@ -1694,6 +1694,104 @@ fn test_external_mount_path() {
     assert_eq!(Coastfile::external_mount_path(3), "/host-external-wt/3");
 }
 
+// ---------------------------------------------------------------------------
+// Glob pattern tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_is_glob_pattern() {
+    assert!(Coastfile::is_glob_pattern("~/.shep/repos/*/wt"));
+    assert!(Coastfile::is_glob_pattern("/foo/ba?/baz"));
+    assert!(Coastfile::is_glob_pattern("/foo/[abc]/bar"));
+    assert!(!Coastfile::is_glob_pattern("~/.codex/worktrees"));
+    assert!(!Coastfile::is_glob_pattern(".worktrees"));
+    assert!(!Coastfile::is_glob_pattern("/absolute/path"));
+}
+
+#[test]
+fn test_resolve_external_worktree_dirs_expanded_no_globs() {
+    let dir = tempfile::tempdir().unwrap();
+    let dirs = vec![".worktrees".to_string(), "~/.codex/worktrees".to_string()];
+    let result = Coastfile::resolve_external_worktree_dirs_expanded(&dirs, dir.path());
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].mount_index, 1);
+    assert_eq!(result[0].raw_pattern, "~/.codex/worktrees");
+}
+
+#[test]
+fn test_resolve_external_worktree_dirs_expanded_glob_with_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let ext = dir.path().join("ext");
+    std::fs::create_dir_all(ext.join("aaa").join("wt")).unwrap();
+    std::fs::create_dir_all(ext.join("bbb").join("wt")).unwrap();
+    std::fs::create_dir_all(ext.join("ccc")).unwrap(); // no "wt" subdir
+
+    let pattern = format!("{}/*/wt", ext.display());
+    let dirs = vec![".worktrees".to_string(), pattern.clone()];
+    let result = Coastfile::resolve_external_worktree_dirs_expanded(&dirs, dir.path());
+
+    assert_eq!(result.len(), 2, "should match aaa/wt and bbb/wt");
+    assert_eq!(
+        result[0].mount_index, 1,
+        "first match reuses original index"
+    );
+    assert_eq!(
+        result[1].mount_index, 2,
+        "second match overflows to dirs.len()"
+    );
+    assert!(result[0].resolved_path.ends_with("aaa/wt"));
+    assert!(result[1].resolved_path.ends_with("bbb/wt"));
+    assert_eq!(result[0].raw_pattern, pattern);
+}
+
+#[test]
+fn test_resolve_external_worktree_dirs_expanded_glob_no_matches() {
+    let dir = tempfile::tempdir().unwrap();
+    let pattern = format!("{}/nonexistent/*/wt", dir.path().display());
+    let dirs = vec![".worktrees".to_string(), pattern];
+    let result = Coastfile::resolve_external_worktree_dirs_expanded(&dirs, dir.path());
+    assert!(result.is_empty(), "no matches should produce empty result");
+}
+
+#[test]
+fn test_resolve_external_worktree_dirs_expanded_preserves_non_glob_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let ext = dir.path().join("ext");
+    std::fs::create_dir_all(ext.join("hash1").join("wt")).unwrap();
+
+    let glob_pattern = format!("{}/*/wt", ext.display());
+    let dirs = vec![
+        ".worktrees".to_string(),         // index 0 (local)
+        "~/.codex/worktrees".to_string(), // index 1 (external, non-glob)
+        glob_pattern,                     // index 2 (external, glob)
+        "/some/literal/path".to_string(), // index 3 (external, non-glob)
+    ];
+    let result = Coastfile::resolve_external_worktree_dirs_expanded(&dirs, dir.path());
+
+    assert_eq!(result.len(), 3);
+    assert_eq!(result[0].mount_index, 1, "codex keeps index 1");
+    assert_eq!(result[1].mount_index, 2, "glob first match keeps index 2");
+    assert_eq!(result[2].mount_index, 3, "literal keeps index 3");
+}
+
+#[test]
+fn test_resolve_external_worktree_dirs_expanded_sorted_deterministic() {
+    let dir = tempfile::tempdir().unwrap();
+    let ext = dir.path().join("repos");
+    std::fs::create_dir_all(ext.join("zzz").join("wt")).unwrap();
+    std::fs::create_dir_all(ext.join("aaa").join("wt")).unwrap();
+    std::fs::create_dir_all(ext.join("mmm").join("wt")).unwrap();
+
+    let pattern = format!("{}/*/wt", ext.display());
+    let dirs = vec![pattern];
+    let result = Coastfile::resolve_external_worktree_dirs_expanded(&dirs, dir.path());
+
+    assert_eq!(result.len(), 3);
+    assert!(result[0].resolved_path.ends_with("aaa/wt"), "sorted first");
+    assert!(result[1].resolved_path.ends_with("mmm/wt"), "sorted second");
+    assert!(result[2].resolved_path.ends_with("zzz/wt"), "sorted third");
+}
+
 #[test]
 fn test_worktree_dir_string_or_vec_compat() {
     let dir = tempfile::tempdir().unwrap();

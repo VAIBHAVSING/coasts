@@ -87,29 +87,34 @@ async fn list_worktree_dirs(project_root: &Path, wt_dir_names: &[String]) -> Opt
     let mut found_any = false;
     let git_dir = project_root.join(".git");
 
+    let expanded_external =
+        Coastfile::resolve_external_worktree_dirs_expanded(wt_dir_names, project_root);
+
     for wt_dir_name in wt_dir_names {
         if Coastfile::is_external_worktree_dir(wt_dir_name) {
-            let resolved = Coastfile::resolve_worktree_dir(project_root, wt_dir_name);
-            let found = scan_external_worktree_dir(&resolved, &git_dir).await;
-            if !found.is_empty() {
-                found_any = true;
-                names.extend(found);
-            }
-        } else {
-            let wt_path = project_root.join(wt_dir_name);
-            let Ok(mut entries) = tokio::fs::read_dir(&wt_path).await else {
-                continue;
-            };
-            found_any = true;
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                if let Ok(ft) = entry.file_type().await {
-                    if ft.is_dir() {
-                        if let Some(name) = entry.file_name().to_str() {
-                            names.push(name.to_string());
-                        }
+            continue; // handled via expanded_external below
+        }
+        let wt_path = project_root.join(wt_dir_name);
+        let Ok(mut entries) = tokio::fs::read_dir(&wt_path).await else {
+            continue;
+        };
+        found_any = true;
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            if let Ok(ft) = entry.file_type().await {
+                if ft.is_dir() {
+                    if let Some(name) = entry.file_name().to_str() {
+                        names.push(name.to_string());
                     }
                 }
             }
+        }
+    }
+
+    for ext_dir in &expanded_external {
+        let found = scan_external_worktree_dir(&ext_dir.resolved_path, &git_dir).await;
+        if !found.is_empty() {
+            found_any = true;
+            names.extend(found);
         }
     }
     if !found_any {
