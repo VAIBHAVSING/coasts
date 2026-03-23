@@ -45,6 +45,27 @@ Paths starting with `/` are also treated as external and get their own bind moun
 worktree_dir = ["/shared/worktrees", ".worktrees"]
 ```
 
+### Glob patterns (external)
+
+External paths can contain glob metacharacters (`*`, `?`, `[...]`). Coast expands them at runtime against the host filesystem, creating a bind mount for each matching directory.
+
+```toml
+worktree_dir = [".worktrees", "~/.shep/repos/*/wt"]
+```
+
+This is useful when a tool generates worktrees under a path component that varies per project (like a hash). The `*` matches any single directory name, so `~/.shep/repos/*/wt` matches `~/.shep/repos/a21f0cda9ab9d456/wt` and any other hash directory that contains a `wt` subdirectory.
+
+Supported glob syntax:
+
+- `*` — matches any sequence of characters within a single path component
+- `?` — matches any single character
+- `[abc]` — matches any character in the set
+- `[!abc]` — matches any character not in the set
+
+Glob expansion happens everywhere worktree dirs are resolved: container creation, assign, start, lookup, and the git watcher. Matches are sorted for deterministic ordering. If a glob matches no directories, it is silently skipped.
+
+Like other external paths, the container must be recreated (`coast run`) after adding a glob pattern for the bind mount to take effect.
+
 ## How external directories work
 
 When Coast encounters an external worktree directory (tilde or absolute path), three things happen:
@@ -100,12 +121,22 @@ name = "my-app"
 worktree_dir = [".worktrees", ".claude/worktrees"]
 ```
 
-### All three together
+### Shep integration
+
+Shep creates worktrees at `~/.shep/repos/{hash}/wt/{branch-slug}` where the hash is per-repo. Use a glob pattern to match the hash directory:
 
 ```toml
 [coast]
 name = "my-app"
-worktree_dir = [".worktrees", ".claude/worktrees", "~/.codex/worktrees"]
+worktree_dir = [".worktrees", "~/.shep/repos/*/wt"]
+```
+
+### All harnesses together
+
+```toml
+[coast]
+name = "my-app"
+worktree_dir = [".worktrees", ".claude/worktrees", "~/.codex/worktrees", "~/.shep/repos/*/wt"]
 ```
 
 ## Live Coastfile reading

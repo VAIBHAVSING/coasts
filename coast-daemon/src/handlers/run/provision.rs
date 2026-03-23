@@ -27,7 +27,7 @@ pub(super) struct ProvisionResult {
 }
 
 type PreAllocatedPort = (String, u16, u16);
-type ExternalWorktreeDir = (usize, std::path::PathBuf);
+type ExternalWorktreeDir = coast_core::coastfile::ResolvedExternalDir;
 type DindContainerManager =
     coast_docker::container::ContainerManager<coast_docker::dind::DindRuntime>;
 
@@ -510,7 +510,10 @@ async fn create_container(
     let external_worktree_dirs = if let Ok(cf) =
         coast_core::coastfile::Coastfile::from_file(&artifact_dir_path.join("coastfile.toml"))
     {
-        cf.external_worktree_dirs()
+        coast_core::coastfile::Coastfile::resolve_external_worktree_dirs_expanded(
+            &cf.worktree_dirs,
+            &cf.project_root,
+        )
     } else {
         Vec::new()
     };
@@ -591,10 +594,12 @@ fn build_container_config(
     });
     append_shared_caddy_pki_bind_mount(&mut config, ctx.shared_caddy_pki_host_dir);
 
-    for (idx, resolved) in ctx.external_worktree_dirs {
+    for ext_dir in ctx.external_worktree_dirs {
         config.bind_mounts.push(coast_docker::runtime::BindMount {
-            host_path: resolved.clone(),
-            container_path: coast_core::coastfile::Coastfile::external_mount_path(*idx),
+            host_path: ext_dir.resolved_path.clone(),
+            container_path: coast_core::coastfile::Coastfile::external_mount_path(
+                ext_dir.mount_index,
+            ),
             read_only: false,
             propagation: None,
         });

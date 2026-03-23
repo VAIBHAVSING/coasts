@@ -147,11 +147,28 @@ pub fn detect_worktree() -> Result<Option<String>> {
     let cwd = std::env::current_dir().context("Failed to get current directory")?;
 
     if let Ok((project_root, worktree_dirs)) = find_project_root_and_worktree_dirs(&cwd) {
+        use coast_core::coastfile::Coastfile;
+
         for dir in &worktree_dirs {
-            let resolved =
-                coast_core::coastfile::Coastfile::resolve_worktree_dir(&project_root, dir);
-            if let Some(name) = detect_worktree_from_paths(&cwd, &resolved)? {
-                return Ok(Some(name));
+            if Coastfile::is_glob_pattern(dir) {
+                let expanded = Coastfile::resolve_external_worktree_dirs_expanded(
+                    &worktree_dirs,
+                    &project_root,
+                );
+                for ext_dir in &expanded {
+                    if ext_dir.raw_pattern == *dir {
+                        if let Some(name) =
+                            detect_worktree_from_paths(&cwd, &ext_dir.resolved_path)?
+                        {
+                            return Ok(Some(name));
+                        }
+                    }
+                }
+            } else {
+                let resolved = Coastfile::resolve_worktree_dir(&project_root, dir);
+                if let Some(name) = detect_worktree_from_paths(&cwd, &resolved)? {
+                    return Ok(Some(name));
+                }
             }
         }
     }
@@ -187,10 +204,13 @@ fn detect_worktree_via_git(cwd: &Path) -> Result<Option<String>> {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     let worktree_dirs = load_worktree_dirs_from_project(&real_project_root);
-    let external_dirs: Vec<std::path::PathBuf> = worktree_dirs
-        .iter()
-        .filter(|d| coast_core::coastfile::Coastfile::is_external_worktree_dir(d))
-        .map(|d| coast_core::coastfile::Coastfile::resolve_worktree_dir(&real_project_root, d))
+    let external_dirs: Vec<std::path::PathBuf> =
+        coast_core::coastfile::Coastfile::resolve_external_worktree_dirs_expanded(
+            &worktree_dirs,
+            &real_project_root,
+        )
+        .into_iter()
+        .map(|d| d.resolved_path)
         .collect();
 
     let mut current_path: Option<std::path::PathBuf> = None;

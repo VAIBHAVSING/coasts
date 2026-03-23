@@ -77,6 +77,7 @@ const DOC_TITLE_KEYS: Record<string, string> = {
   'harnesses/CURSOR.md': 'docs.nav.harnessCursor',
   'harnesses/CONDUCTOR.md': 'docs.nav.harnessConductor',
   'harnesses/T3_CODE.md': 'docs.nav.harnessT3Code',
+  'harnesses/SHEP.md': 'docs.nav.harnessShep',
   'harnesses/MULTIPLE_HARNESSES.md': 'docs.nav.harnessMultipleHarnesses',
   'recipes/README.md': 'docs.nav.recipes',
   'recipes/FULLSTACK_MONOREPO.md': 'docs.nav.recipesFullstackMonorepo',

@@ -328,18 +328,8 @@ async fn find_worktree_in_external_dirs(
 ) -> Option<WorktreeLocation> {
     use coast_core::coastfile::Coastfile;
 
-    let external_dirs: Vec<(usize, String, std::path::PathBuf)> = worktree_dirs
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| Coastfile::is_external_worktree_dir(d))
-        .map(|(idx, d)| {
-            (
-                idx,
-                d.clone(),
-                Coastfile::resolve_worktree_dir(project_root, d),
-            )
-        })
-        .collect();
+    let external_dirs =
+        Coastfile::resolve_external_worktree_dirs_expanded(worktree_dirs, project_root);
 
     if external_dirs.is_empty() {
         return None;
@@ -462,7 +452,7 @@ enum MatchMode {
 fn match_porcelain_to_external(
     porcelain: &str,
     worktree_name: &str,
-    external_dirs: &[(usize, String, std::path::PathBuf)],
+    external_dirs: &[coast_core::coastfile::ResolvedExternalDir],
 ) -> Option<WorktreeLocation> {
     let entries = parse_porcelain_entries(porcelain);
 
@@ -499,7 +489,7 @@ fn try_match_external_worktree(
     line: &str,
     wt_path: &std::path::Path,
     worktree_name: &str,
-    external_dirs: &[(usize, String, std::path::PathBuf)],
+    external_dirs: &[coast_core::coastfile::ResolvedExternalDir],
     mode: MatchMode,
 ) -> Option<WorktreeLocation> {
     use coast_core::coastfile::Coastfile;
@@ -514,8 +504,11 @@ fn try_match_external_worktree(
         wt_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
     };
 
-    for (idx, raw_dir, resolved) in external_dirs {
-        let canon_ext = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+    for ext_dir in external_dirs {
+        let canon_ext = ext_dir
+            .resolved_path
+            .canonicalize()
+            .unwrap_or_else(|_| ext_dir.resolved_path.clone());
         if !wt_canonical.starts_with(&canon_ext) {
             continue;
         }
@@ -528,10 +521,10 @@ fn try_match_external_worktree(
             MatchMode::BranchOnly => branch_name == worktree_name,
         };
         if matches {
-            let ext_mount = Coastfile::external_mount_path(*idx);
+            let ext_mount = Coastfile::external_mount_path(ext_dir.mount_index);
             let mount_src = format!("{ext_mount}/{relative_str}");
             return Some(WorktreeLocation {
-                wt_dir: raw_dir.clone(),
+                wt_dir: ext_dir.raw_pattern.clone(),
                 host_path: wt_canonical,
                 container_mount_src: mount_src,
             });
@@ -2088,7 +2081,11 @@ mod tests {
             wt_b.display(),
         );
 
-        let external_dirs = vec![(0_usize, "~/ext".to_string(), ext_path)];
+        let external_dirs = vec![coast_core::coastfile::ResolvedExternalDir {
+            mount_index: 0,
+            raw_pattern: "~/ext".to_string(),
+            resolved_path: ext_path,
+        }];
 
         let loc = match_porcelain_to_external(&porcelain, "foo", &external_dirs);
         assert!(loc.is_some(), "should find a match");
@@ -2111,7 +2108,11 @@ mod tests {
 
         let porcelain = format!("worktree {}\nbranch refs/heads/my-branch\n\n", wt.display(),);
 
-        let external_dirs = vec![(0_usize, "~/ext".to_string(), ext_path)];
+        let external_dirs = vec![coast_core::coastfile::ResolvedExternalDir {
+            mount_index: 0,
+            raw_pattern: "~/ext".to_string(),
+            resolved_path: ext_path,
+        }];
 
         // No directory match for "my-branch", but branch matches.
         let loc = match_porcelain_to_external(&porcelain, "my-branch", &external_dirs);

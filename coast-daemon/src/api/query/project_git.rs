@@ -86,10 +86,9 @@ fn load_external_worktree_dirs(project: &str, project_root: &std::path::Path) ->
     use coast_core::coastfile::Coastfile;
 
     let worktree_dirs = load_worktree_dirs_from_live_or_cached(project, project_root);
-    worktree_dirs
-        .iter()
-        .filter(|d| Coastfile::is_external_worktree_dir(d))
-        .map(|d| Coastfile::resolve_worktree_dir(project_root, d))
+    Coastfile::resolve_external_worktree_dirs_expanded(&worktree_dirs, project_root)
+        .into_iter()
+        .map(|d| d.resolved_path)
         .collect()
 }
 

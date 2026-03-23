@@ -762,4 +762,75 @@ impl Coastfile {
     pub fn external_mount_path(index: usize) -> String {
         format!("{EXTERNAL_WORKTREE_MOUNT_PREFIX}/{index}")
     }
+
+    /// Returns `true` if a worktree dir path contains glob metacharacters (`*`, `?`, `[`).
+    pub fn is_glob_pattern(dir: &str) -> bool {
+        dir.contains('*') || dir.contains('?') || dir.contains('[')
+    }
+
+    /// Resolve all external worktree dirs, expanding glob patterns.
+    ///
+    /// Non-glob entries keep their original `worktree_dirs` index as the mount
+    /// index (backward compatible). For glob entries the first match reuses the
+    /// original index; additional matches are allocated sequentially starting
+    /// from `worktree_dirs.len()`.
+    pub fn resolve_external_worktree_dirs_expanded(
+        worktree_dirs: &[String],
+        project_root: &Path,
+    ) -> Vec<ResolvedExternalDir> {
+        let mut results = Vec::new();
+        let mut overflow_index = worktree_dirs.len();
+
+        for (idx, dir) in worktree_dirs.iter().enumerate() {
+            if !Self::is_external_worktree_dir(dir) {
+                continue;
+            }
+            let resolved = Self::resolve_worktree_dir(project_root, dir);
+            let resolved_str = resolved.to_string_lossy().to_string();
+
+            if Self::is_glob_pattern(&resolved_str) {
+                let mut matches: Vec<PathBuf> = glob::glob(&resolved_str)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(std::result::Result::ok)
+                    .filter(|p| p.is_dir())
+                    .collect();
+                matches.sort();
+
+                for (i, matched_path) in matches.into_iter().enumerate() {
+                    let mount_index = if i == 0 {
+                        idx
+                    } else {
+                        let mi = overflow_index;
+                        overflow_index += 1;
+                        mi
+                    };
+                    results.push(ResolvedExternalDir {
+                        mount_index,
+                        raw_pattern: dir.clone(),
+                        resolved_path: matched_path,
+                    });
+                }
+            } else {
+                results.push(ResolvedExternalDir {
+                    mount_index: idx,
+                    raw_pattern: dir.clone(),
+                    resolved_path: resolved,
+                });
+            }
+        }
+
+        results
+    }
+}
+
+/// A resolved external worktree directory, possibly expanded from a glob pattern.
+#[derive(Debug, Clone)]
+pub struct ResolvedExternalDir {
+    /// Index used for the container mount path (`/host-external-wt/{mount_index}`).
+    pub mount_index: usize,
+    /// The original pattern string from the Coastfile (e.g. `~/.shep/repos/*/wt`).
+    pub raw_pattern: String,
+    /// The fully resolved absolute path on the host.
+    pub resolved_path: PathBuf,
 }
