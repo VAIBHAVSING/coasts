@@ -126,6 +126,261 @@ async fn start_bare_services_if_present(
     has_svc
 }
 
+/// Re-apply the `/workspace` bind mount inside the coast container.
+///
+/// Computes the mount source from the project/worktree configuration,
+/// builds the symlink fix for worktrees, and executes the mount command.
+/// Failures are logged as warnings — they do not fail the start.
+async fn reapply_workspace_mount(
+    rt: &dyn Runtime,
+    container_id: &str,
+    project: &str,
+    worktree_name: Option<&str>,
+    parsed_coastfile: Option<&coast_core::coastfile::Coastfile>,
+    name: &str,
+) {
+    let mount_src = compute_start_mount_src(project, worktree_name, parsed_coastfile);
+    let home = dirs::home_dir().unwrap_or_default();
+    let project_dir = home.join(".coast").join("images").join(project);
+    let manifest_path = project_dir.join("latest").join("manifest.json");
+    let project_root_str = manifest_path
+        .exists()
+        .then(|| std::fs::read_to_string(&manifest_path).ok())
+        .flatten()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("project_root")?.as_str().map(String::from))
+        .unwrap_or_default();
+    let symlink_fix = if worktree_name.is_some() && !project_root_str.is_empty() {
+        let parent = std::path::Path::new(&project_root_str)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        format!(" && mkdir -p '{parent}' && ln -sfn /host-project '{project_root_str}'")
+    } else {
+        String::new()
+    };
+    let mount_cmd = build_workspace_mount_command(&mount_src, &symlink_fix);
+    match rt.exec_in_coast(container_id, &["sh", "-c", &mount_cmd]).await {
+        Ok(r) if r.success() => {
+            info!(name = %name, src = %mount_src, "re-applied /workspace bind mount");
+        }
+        Ok(r) => {
+            warn!(name = %name, stderr = %r.stderr, "failed to re-apply /workspace bind mount");
+        }
+        Err(e) => {
+            warn!(name = %name, error = %e, "failed to re-apply /workspace bind mount");
+        }
+    }
+}
+
+/// Set up shared service proxies for the coast container.
+///
+/// Builds routing targets from the coastfile's shared services, plans the
+/// routing, and ensures proxies are running. Returns early if no shared
+/// services are configured.
+async fn setup_shared_services(
+    docker: &bollard::Docker,
+    container_id: &str,
+    coastfile: &coast_core::coastfile::Coastfile,
+    project: &str,
+) -> Result<()> {
+    if coastfile.shared_services.is_empty() {
+        return Ok(());
+    }
+    let shared_service_targets = coastfile
+        .shared_services
+        .iter()
+        .map(|service| {
+            (
+                service.name.clone(),
+                crate::shared_services::shared_container_name(project, &service.name),
+            )
+        })
+        .collect();
+    let routing = plan_shared_service_routing(
+        docker,
+        container_id,
+        &coastfile.shared_services,
+        &shared_service_targets,
+    )
+    .await?;
+    ensure_shared_service_proxies(docker, container_id, &routing).await
+}
+
+/// Run `docker compose up` and poll for service health.
+///
+/// Executes `compose up -d --remove-orphans --force-recreate`, then polls
+/// `compose ps --format json` up to 30 times (2s interval) until all
+/// services report running/healthy.
+async fn run_compose_and_wait_for_health(
+    rt: &dyn Runtime,
+    container_id: &str,
+    project: &str,
+    build_id: Option<&str>,
+    progress: &Option<tokio::sync::mpsc::Sender<BuildProgressEvent>>,
+) {
+    let ctx = super::compose_context_for_build(project, build_id);
+    let up_subcmd = "up -d --remove-orphans --force-recreate";
+    let compose_cmd = ctx.compose_shell(up_subcmd);
+    let compose_refs: Vec<&str> = compose_cmd.iter().map(std::string::String::as_str).collect();
+    let _ = rt.exec_in_coast(container_id, &compose_refs).await;
+
+    emit(
+        progress,
+        BuildProgressEvent::item("Running compose up", "compose up -d", "ok"),
+    );
+
+    emit(
+        progress,
+        BuildProgressEvent::started("Waiting for services", 4, TOTAL_START_STEPS),
+    );
+
+    let health_cmd = ctx.compose_shell("ps --format json");
+    let health_refs: Vec<&str> = health_cmd.iter().map(std::string::String::as_str).collect();
+    for _ in 0..30 {
+        let result = rt.exec_in_coast(container_id, &health_refs).await;
+        if let Ok(ref exec_result) = result {
+            if exec_result.success()
+                && super::run::compose_ps_output_is_ready(&exec_result.stdout)
+            {
+                break;
+            }
+        }
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+    emit(
+        progress,
+        BuildProgressEvent::item("Waiting for services", "all services", "ok"),
+    );
+}
+
+/// Backfill `build_id` for instances created before the build_id migration.
+///
+/// Reads the `latest` symlink to discover the current build ID and persists
+/// it in the database. This is a no-op for instances that already have a
+/// `build_id`.
+async fn backfill_build_id(state: &AppState, project: &str, name: &str) {
+    let Some(home) = dirs::home_dir() else {
+        return;
+    };
+    let latest_link = home.join(".coast").join("images").join(project).join("latest");
+    let Ok(target) = std::fs::read_link(&latest_link) else {
+        return;
+    };
+    if let Some(bid) = target.file_name().map(|f| f.to_string_lossy().into_owned()) {
+        let db = state.db.lock().await;
+        let _ = db.set_build_id(project, name, Some(&bid));
+        info!(name = %name, build_id = %bid, "backfilled build_id for pre-migration instance");
+    }
+}
+
+/// Execute all Docker operations for the start sequence.
+///
+/// Starts the container, waits for the inner daemon, re-applies the workspace
+/// mount, sets up shared services, runs compose, and starts bare services.
+async fn run_docker_operations(
+    docker: &bollard::Docker,
+    container_id: &str,
+    req: &StartRequest,
+    build_id: Option<&str>,
+    worktree_name: Option<&str>,
+    progress: &Option<tokio::sync::mpsc::Sender<BuildProgressEvent>>,
+) -> Result<()> {
+    // Step 1: Start the coast container
+    emit(
+        progress,
+        BuildProgressEvent::started("Starting container", 1, TOTAL_START_STEPS),
+    );
+    let runtime = coast_docker::dind::DindRuntime::with_client(docker.clone());
+    if let Err(e) = runtime.start_coast_container(container_id).await {
+        return Err(CoastError::docker(format!(
+            "Failed to start container for instance '{}': {}. \
+             Try `coast rm {}` and `coast run` again.",
+            req.name, e, req.name
+        )));
+    }
+    emit(
+        progress,
+        BuildProgressEvent::item("Starting container", "container", "ok"),
+    );
+
+    // Step 2: Wait for inner Docker daemon
+    emit(
+        progress,
+        BuildProgressEvent::started("Waiting for inner daemon", 2, TOTAL_START_STEPS),
+    );
+    let manager = coast_docker::container::ContainerManager::new(runtime);
+    if let Err(e) = manager.wait_for_inner_daemon(container_id).await {
+        return Err(CoastError::docker(format!(
+            "Inner Docker daemon in instance '{}' failed to start: {}. \
+             Try `coast rm {}` and `coast run` again.",
+            req.name, e, req.name
+        )));
+    }
+
+    let rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
+    verify_inner_daemon_health(&rt, container_id, &req.name).await?;
+    emit(
+        progress,
+        BuildProgressEvent::item("Waiting for inner daemon", "docker info", "ok"),
+    );
+
+    // Step 3: Start compose
+    emit(
+        progress,
+        BuildProgressEvent::started("Running compose up", 3, TOTAL_START_STEPS),
+    );
+
+    let coastfile_path = super::artifact_coastfile_path(&req.project, build_id);
+    let parsed_coastfile = coastfile_path
+        .exists()
+        .then(|| coast_core::coastfile::Coastfile::from_file(&coastfile_path).ok())
+        .flatten();
+    let project_has_compose = parsed_coastfile
+        .as_ref()
+        .map(|coastfile| coastfile.compose.is_some())
+        .unwrap_or(true);
+
+    let mount_rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
+    reapply_workspace_mount(
+        &mount_rt,
+        container_id,
+        &req.project,
+        worktree_name,
+        parsed_coastfile.as_ref(),
+        &req.name,
+    )
+    .await;
+
+    if let Some(ref coastfile) = parsed_coastfile {
+        setup_shared_services(docker, container_id, coastfile, &req.project).await?;
+    }
+
+    if project_has_compose {
+        let compose_rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
+        run_compose_and_wait_for_health(
+            &compose_rt,
+            container_id,
+            &req.project,
+            build_id,
+            progress,
+        )
+        .await;
+    }
+
+    // Also start bare services (may coexist with compose)
+    let svc_rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
+    let has_svc = start_bare_services_if_present(&svc_rt, container_id, progress).await;
+    if !has_svc && !project_has_compose {
+        emit(
+            progress,
+            BuildProgressEvent::item("Running compose up", "no compose", "skip"),
+        );
+    }
+
+    Ok(())
+}
+
 /// Handle a start request with optional progress streaming.
 ///
 /// Steps:
@@ -136,7 +391,6 @@ async fn start_bare_services_if_present(
 /// 5. Wait for all services to be healthy/running.
 /// 6. Restart socat forwarders for dynamic ports.
 /// 7. Update instance status to "running" in state DB.
-#[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
 pub async fn handle(
     req: StartRequest,
     state: &AppState,
@@ -157,22 +411,8 @@ pub async fn handle(
         inst
     };
 
-    // Backfill build_id for pre-migration instances
     if instance.build_id.is_none() {
-        if let Some(home) = dirs::home_dir() {
-            let latest_link = home
-                .join(".coast")
-                .join("images")
-                .join(&req.project)
-                .join("latest");
-            if let Ok(target) = std::fs::read_link(&latest_link) {
-                if let Some(bid) = target.file_name().map(|f| f.to_string_lossy().into_owned()) {
-                    let db = state.db.lock().await;
-                    let _ = db.set_build_id(&req.project, &req.name, Some(&bid));
-                    info!(name = %req.name, build_id = %bid, "backfilled build_id for pre-migration instance");
-                }
-            }
-        }
+        backfill_build_id(state, &req.project, &req.name).await;
     }
 
     state.emit_event(CoastEvent::InstanceStatusChanged {
@@ -194,206 +434,18 @@ pub async fn handle(
     // Phase 2: Docker operations (unlocked)
     if let Some(ref container_id) = instance.container_id {
         if let Some(ref docker) = state.docker {
-            // Step 1: Start the coast container
-            emit(
+            if let Err(e) = run_docker_operations(
+                docker,
+                container_id,
+                &req,
+                instance.build_id.as_deref(),
+                instance.worktree_name.as_deref(),
                 &progress,
-                BuildProgressEvent::started("Starting container", 1, TOTAL_START_STEPS),
-            );
-            let runtime = coast_docker::dind::DindRuntime::with_client(docker.clone());
-            if let Err(e) = runtime.start_coast_container(container_id).await {
-                revert_to_stopped(state, &req.project, &req.name).await;
-                return Err(CoastError::docker(format!(
-                    "Failed to start container for instance '{}': {}. \
-                     Try `coast rm {}` and `coast run` again.",
-                    req.name, e, req.name
-                )));
-            }
-            emit(
-                &progress,
-                BuildProgressEvent::item("Starting container", "container", "ok"),
-            );
-
-            // Step 2: Wait for inner Docker daemon
-            emit(
-                &progress,
-                BuildProgressEvent::started("Waiting for inner daemon", 2, TOTAL_START_STEPS),
-            );
-            let manager = coast_docker::container::ContainerManager::new(runtime);
-            if let Err(e) = manager.wait_for_inner_daemon(container_id).await {
-                revert_to_stopped(state, &req.project, &req.name).await;
-                return Err(CoastError::docker(format!(
-                    "Inner Docker daemon in instance '{}' failed to start: {}. \
-                     Try `coast rm {}` and `coast run` again.",
-                    req.name, e, req.name
-                )));
-            }
-
-            let rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
-            if let Err(e) = verify_inner_daemon_health(&rt, container_id, &req.name).await {
+            )
+            .await
+            {
                 revert_to_stopped(state, &req.project, &req.name).await;
                 return Err(e);
-            }
-            emit(
-                &progress,
-                BuildProgressEvent::item("Waiting for inner daemon", "docker info", "ok"),
-            );
-
-            // Step 3: Start compose
-            emit(
-                &progress,
-                BuildProgressEvent::started("Running compose up", 3, TOTAL_START_STEPS),
-            );
-
-            let coastfile_path =
-                super::artifact_coastfile_path(&req.project, instance.build_id.as_deref());
-            let parsed_coastfile = coastfile_path
-                .exists()
-                .then(|| coast_core::coastfile::Coastfile::from_file(&coastfile_path).ok())
-                .flatten();
-            let project_has_compose = parsed_coastfile
-                .as_ref()
-                .map(|coastfile| coastfile.compose.is_some())
-                .unwrap_or(true);
-
-            // Re-apply the /workspace bind mount (project root or worktree).
-            {
-                let mount_rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
-                let mount_src = compute_start_mount_src(
-                    &req.project,
-                    instance.worktree_name.as_deref(),
-                    parsed_coastfile.as_ref(),
-                );
-                let home = dirs::home_dir().unwrap_or_default();
-                let project_dir = home.join(".coast").join("images").join(&req.project);
-                let manifest_path = project_dir.join("latest").join("manifest.json");
-                let project_root_str = manifest_path
-                    .exists()
-                    .then(|| std::fs::read_to_string(&manifest_path).ok())
-                    .flatten()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                    .and_then(|v| v.get("project_root")?.as_str().map(String::from))
-                    .unwrap_or_default();
-                let symlink_fix = if instance.worktree_name.is_some()
-                    && !project_root_str.is_empty()
-                {
-                    let parent = std::path::Path::new(&project_root_str)
-                        .parent()
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    format!(" && mkdir -p '{parent}' && ln -sfn /host-project '{project_root_str}'")
-                } else {
-                    String::new()
-                };
-                let mount_cmd = build_workspace_mount_command(&mount_src, &symlink_fix);
-                let mount_result = mount_rt
-                    .exec_in_coast(container_id, &["sh", "-c", &mount_cmd])
-                    .await;
-                match mount_result {
-                    Ok(r) if r.success() => {
-                        info!(name = %req.name, src = %mount_src, "re-applied /workspace bind mount");
-                    }
-                    Ok(r) => {
-                        warn!(name = %req.name, stderr = %r.stderr, "failed to re-apply /workspace bind mount");
-                    }
-                    Err(e) => {
-                        warn!(name = %req.name, error = %e, "failed to re-apply /workspace bind mount");
-                    }
-                }
-            }
-
-            if let Some(ref coastfile) = parsed_coastfile {
-                if !coastfile.shared_services.is_empty() {
-                    let shared_service_targets = coastfile
-                        .shared_services
-                        .iter()
-                        .map(|service| {
-                            (
-                                service.name.clone(),
-                                crate::shared_services::shared_container_name(
-                                    &req.project,
-                                    &service.name,
-                                ),
-                            )
-                        })
-                        .collect();
-
-                    let routing = match plan_shared_service_routing(
-                        docker,
-                        container_id,
-                        &coastfile.shared_services,
-                        &shared_service_targets,
-                    )
-                    .await
-                    {
-                        Ok(routing) => routing,
-                        Err(error) => {
-                            revert_to_stopped(state, &req.project, &req.name).await;
-                            return Err(error);
-                        }
-                    };
-
-                    if let Err(error) =
-                        ensure_shared_service_proxies(docker, container_id, &routing).await
-                    {
-                        revert_to_stopped(state, &req.project, &req.name).await;
-                        return Err(error);
-                    }
-                }
-            }
-
-            if project_has_compose {
-                let ctx =
-                    super::compose_context_for_build(&req.project, instance.build_id.as_deref());
-                let up_subcmd = "up -d --remove-orphans --force-recreate";
-                let compose_cmd = ctx.compose_shell(up_subcmd);
-                let compose_refs: Vec<&str> = compose_cmd
-                    .iter()
-                    .map(std::string::String::as_str)
-                    .collect();
-
-                let runtime2 = coast_docker::dind::DindRuntime::with_client(docker.clone());
-                let _ = runtime2.exec_in_coast(container_id, &compose_refs).await;
-
-                emit(
-                    &progress,
-                    BuildProgressEvent::item("Running compose up", "compose up -d", "ok"),
-                );
-
-                // Step 4: Wait for services to be healthy
-                emit(
-                    &progress,
-                    BuildProgressEvent::started("Waiting for services", 4, TOTAL_START_STEPS),
-                );
-
-                let health_cmd = ctx.compose_shell("ps --format json");
-                let health_refs: Vec<&str> =
-                    health_cmd.iter().map(std::string::String::as_str).collect();
-                for _ in 0..30 {
-                    let result = runtime2.exec_in_coast(container_id, &health_refs).await;
-                    if let Ok(ref exec_result) = result {
-                        if exec_result.success()
-                            && super::run::compose_ps_output_is_ready(&exec_result.stdout)
-                        {
-                            break;
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-                }
-                emit(
-                    &progress,
-                    BuildProgressEvent::item("Waiting for services", "all services", "ok"),
-                );
-            }
-
-            // Also start bare services (may coexist with compose)
-            let svc_rt = coast_docker::dind::DindRuntime::with_client(docker.clone());
-            let has_svc =
-                start_bare_services_if_present(&svc_rt, container_id, &progress).await;
-            if !has_svc && !project_has_compose {
-                emit(
-                    &progress,
-                    BuildProgressEvent::item("Running compose up", "no compose", "skip"),
-                );
             }
         }
     }
@@ -955,5 +1007,82 @@ mod tests {
 
         let has = start_bare_services_if_present(&rt, "ctr-1", &None).await;
         assert!(!has);
+    }
+
+    // --- reapply_workspace_mount tests ---
+
+    #[tokio::test]
+    async fn test_reapply_workspace_mount_success() {
+        let rt = MockRuntime::new();
+        // mount exec succeeds
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }));
+
+        // Should not panic — success is logged, no return value to check
+        reapply_workspace_mount(&rt, "ctr-1", "my-app", None, None, "inst").await;
+    }
+
+    #[tokio::test]
+    async fn test_reapply_workspace_mount_failure_logs_warning() {
+        let rt = MockRuntime::new();
+        // mount exec fails
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "permission denied".to_string(),
+        }));
+
+        // Should not panic — failure is a warning, not an error
+        reapply_workspace_mount(&rt, "ctr-1", "my-app", None, None, "inst").await;
+    }
+
+    // --- run_compose_and_wait_for_health tests ---
+
+    #[tokio::test]
+    async fn test_run_compose_and_wait_for_health_ready_first_poll() {
+        let rt = MockRuntime::new();
+        // compose up exec
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }));
+        // compose ps returns healthy on first poll
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: r#"{"State":"running"}"#.to_string(),
+            stderr: String::new(),
+        }));
+
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        run_compose_and_wait_for_health(&rt, "ctr-1", "my-app", None, &Some(tx)).await;
+    }
+
+    #[tokio::test]
+    async fn test_run_compose_and_wait_for_health_ready_after_retry() {
+        let rt = MockRuntime::new();
+        // compose up exec
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+        }));
+        // first poll: not ready
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: r#"{"State":"starting"}"#.to_string(),
+            stderr: String::new(),
+        }));
+        // second poll: ready
+        rt.push_exec_result(Ok(ExecResult {
+            exit_code: 0,
+            stdout: r#"{"State":"running"}"#.to_string(),
+            stderr: String::new(),
+        }));
+
+        run_compose_and_wait_for_health(&rt, "ctr-1", "my-app", None, &None).await;
     }
 }
