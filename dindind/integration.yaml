@@ -70,12 +70,20 @@ tests:
     script: integrated-examples/test_agent_shell.sh
   test_volume_shared:
     script: integrated-examples/test_volume_shared.sh
+    status: pass
+    cached_seconds: 127
   test_volume_isolated:
     script: integrated-examples/test_volume_isolated.sh
+    status: pass
+    cached_seconds: 155
   test_volume_shared_services:
     script: integrated-examples/test_volume_shared_services.sh
+    status: pass
+    cached_seconds: 127
   test_volume_source:
     script: integrated-examples/test_volume_source.sh
+    status: pass
+    cached_seconds: 133
   test_dangling_containers:
     script: integrated-examples/test_dangling_containers.sh
   test_restart_services:

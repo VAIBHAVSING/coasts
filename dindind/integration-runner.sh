@@ -96,9 +96,8 @@ rsync -a --exclude target --exclude .coasts --exclude .worktrees /coast-repo/ /w
 cd /workspace
 
 echo "==> Building coast binaries (cargo build --release)..."
-# If a previous killed run left a non-ELF file in the cached target volume,
-# remove it so cargo rebuilds the real binary.
-if [ -f /workspace/target/release/coast ] && ! file /workspace/target/release/coast | grep -q ELF; then
+# Remove stale wrapper symlinks or non-ELF files from cached target volume.
+if [ -L /workspace/target/release/coast ] || { [ -f /workspace/target/release/coast ] && ! file /workspace/target/release/coast 2>/dev/null | grep -q ELF; }; then
   rm -f /workspace/target/release/coast
 fi
 cargo build --release 2>&1
