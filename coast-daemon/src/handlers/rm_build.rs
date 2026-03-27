@@ -8,7 +8,10 @@ use coast_core::artifact::coast_home;
 use coast_core::error::{CoastError, Result};
 use coast_core::protocol::{BuildProgressEvent, CoastEvent, RmBuildRequest, RmBuildResponse};
 
+use coast_core::types::CoastInstance;
+
 use crate::server::AppState;
+use crate::state::StateDb;
 
 fn emit(
     progress: &Option<tokio::sync::mpsc::Sender<BuildProgressEvent>>,
@@ -49,29 +52,7 @@ pub async fn handle(
     );
     {
         let db = state.db.lock().await;
-        let instances = db.list_instances_for_project(&req.project)?;
-        if !instances.is_empty() {
-            return Err(CoastError::state(format!(
-                "Cannot remove build for '{}': {} instance(s) still exist. \
-                 Run `coast rm --all --project {}` first.",
-                req.project,
-                instances.len(),
-                req.project,
-            )));
-        }
-        let shared = db.list_shared_services(Some(&req.project))?;
-        let running: Vec<_> = shared.iter().filter(|s| s.status == "running").collect();
-        if !running.is_empty() {
-            let names: Vec<&str> = running.iter().map(|s| s.service_name.as_str()).collect();
-            return Err(CoastError::state(format!(
-                "Cannot remove build for '{}': {} shared service(s) still running ({}). \
-                 Run `coast shared-services stop --all --project {}` first.",
-                req.project,
-                running.len(),
-                names.join(", "),
-                req.project,
-            )));
-        }
+        validate_removable(&db, &req.project)?;
     }
     emit(&progress, BuildProgressEvent::ok("Validating", 1, total));
 
@@ -224,25 +205,10 @@ async fn handle_remove_specific_builds(
         .ok()
         .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()));
 
-    let in_use: std::collections::HashMap<String, Vec<String>> = {
+    let in_use = {
         let db = state.db.lock().await;
         let instances = db.list_instances_for_project(project).unwrap_or_default();
-        let mut map: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        let mut null_build_names: Vec<String> = Vec::new();
-        for inst in instances {
-            if let Some(bid) = inst.build_id {
-                map.entry(bid).or_default().push(inst.name);
-            } else {
-                null_build_names.push(inst.name);
-            }
-        }
-        if !null_build_names.is_empty() {
-            if let Some(ref lt) = latest_target {
-                map.entry(lt.clone()).or_default().extend(null_build_names);
-            }
-        }
-        map
+        build_in_use_map(&instances, latest_target.as_deref())
     };
     emit(
         &progress,
@@ -333,6 +299,61 @@ async fn handle_remove_specific_builds(
         artifact_removed: false,
         builds_removed,
     })
+}
+
+/// Check that no instances or running shared services block build removal.
+fn validate_removable(db: &StateDb, project: &str) -> Result<()> {
+    let instances = db.list_instances_for_project(project)?;
+    if !instances.is_empty() {
+        return Err(CoastError::state(format!(
+            "Cannot remove build for '{}': {} instance(s) still exist. \
+             Run `coast rm --all --project {}` first.",
+            project,
+            instances.len(),
+            project,
+        )));
+    }
+    let shared = db.list_shared_services(Some(project))?;
+    let running: Vec<_> = shared.iter().filter(|s| s.status == "running").collect();
+    if !running.is_empty() {
+        let names: Vec<&str> = running.iter().map(|s| s.service_name.as_str()).collect();
+        return Err(CoastError::state(format!(
+            "Cannot remove build for '{}': {} shared service(s) still running ({}). \
+             Run `coast shared-services stop --all --project {}` first.",
+            project,
+            running.len(),
+            names.join(", "),
+            project,
+        )));
+    }
+    Ok(())
+}
+
+/// Build a map from build ID to the instance names using that build.
+///
+/// Instances without a `build_id` are attributed to `latest_target` (the
+/// symlink target of the "latest" alias) when present.
+fn build_in_use_map(
+    instances: &[CoastInstance],
+    latest_target: Option<&str>,
+) -> std::collections::HashMap<String, Vec<String>> {
+    let mut map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+    let mut null_build_names: Vec<String> = Vec::new();
+    for inst in instances {
+        if let Some(ref bid) = inst.build_id {
+            map.entry(bid.clone()).or_default().push(inst.name.clone());
+        } else {
+            null_build_names.push(inst.name.clone());
+        }
+    }
+    if !null_build_names.is_empty() {
+        if let Some(lt) = latest_target {
+            map.entry(lt.to_string())
+                .or_default()
+                .extend(null_build_names);
+        }
+    }
+    map
 }
 
 /// Remove all containers labelled with `coast.project={project}`.
@@ -514,6 +535,105 @@ fn remove_artifact_dir(project: &str) -> bool {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    use crate::state::StateDb;
+    use coast_core::types::{CoastInstance, RuntimeType};
+
+    fn make_instance(name: &str, project: &str, build_id: Option<&str>) -> CoastInstance {
+        CoastInstance {
+            name: name.to_string(),
+            project: project.to_string(),
+            status: coast_core::types::InstanceStatus::Running,
+            branch: Some("main".to_string()),
+            commit_sha: None,
+            container_id: Some("container-123".to_string()),
+            runtime: RuntimeType::Dind,
+            created_at: chrono::Utc::now(),
+            worktree_name: None,
+            build_id: build_id.map(String::from),
+            coastfile_type: None,
+        }
+    }
+
+    // --- validate_removable tests ---
+
+    #[test]
+    fn test_validate_removable_no_instances_no_shared_services() {
+        let db = StateDb::open_in_memory().unwrap();
+        assert!(validate_removable(&db, "my-app").is_ok());
+    }
+
+    #[test]
+    fn test_validate_removable_instances_exist() {
+        let db = StateDb::open_in_memory().unwrap();
+        db.insert_instance(&make_instance("feat-a", "my-app", None))
+            .unwrap();
+        let err = validate_removable(&db, "my-app").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("instance(s) still exist"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_validate_removable_running_shared_services() {
+        let db = StateDb::open_in_memory().unwrap();
+        db.insert_shared_service("my-app", "redis", Some("cid"), "running")
+            .unwrap();
+        let err = validate_removable(&db, "my-app").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("shared service(s) still running"),
+            "got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_validate_removable_stopped_shared_services_ok() {
+        let db = StateDb::open_in_memory().unwrap();
+        db.insert_shared_service("my-app", "redis", None, "stopped")
+            .unwrap();
+        assert!(validate_removable(&db, "my-app").is_ok());
+    }
+
+    // --- build_in_use_map tests ---
+
+    #[test]
+    fn test_build_in_use_map_with_build_id() {
+        let instances = vec![make_instance("inst-a", "proj", Some("abc"))];
+        let map = build_in_use_map(&instances, None);
+        assert_eq!(map.get("abc").unwrap(), &vec!["inst-a".to_string()]);
+    }
+
+    #[test]
+    fn test_build_in_use_map_without_build_id_uses_latest() {
+        let instances = vec![make_instance("inst-a", "proj", None)];
+        let map = build_in_use_map(&instances, Some("xyz"));
+        assert_eq!(map.get("xyz").unwrap(), &vec!["inst-a".to_string()]);
+    }
+
+    #[test]
+    fn test_build_in_use_map_without_build_id_no_latest() {
+        let instances = vec![make_instance("inst-a", "proj", None)];
+        let map = build_in_use_map(&instances, None);
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_build_in_use_map_multiple_instances_same_build() {
+        let instances = vec![
+            make_instance("inst-a", "proj", Some("abc")),
+            make_instance("inst-b", "proj", Some("abc")),
+        ];
+        let map = build_in_use_map(&instances, None);
+        let mut names = map.get("abc").unwrap().clone();
+        names.sort();
+        assert_eq!(names, vec!["inst-a".to_string(), "inst-b".to_string()]);
+    }
+
+    #[test]
+    fn test_build_in_use_map_empty_instances() {
+        let map = build_in_use_map(&[], None);
+        assert!(map.is_empty());
+    }
 
     // --- volume_belongs_to_project tests ---
 
