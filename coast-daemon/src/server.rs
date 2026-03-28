@@ -181,6 +181,8 @@ pub struct AppState {
     pub update_quiescing: Arc<AtomicBool>,
     /// Explicit registry of currently active mutating operations.
     pub active_update_operations: Arc<std::sync::Mutex<HashMap<uuid::Uuid, ActiveUpdateOperation>>>,
+    /// SSH tunnel manager for remote daemon connections.
+    pub tunnel_manager: Option<Arc<crate::remote::TunnelManager>>,
 }
 
 impl AppState {
@@ -235,6 +237,7 @@ impl AppState {
             analytics_enabled_tx,
             update_quiescing: Arc::new(AtomicBool::new(false)),
             active_update_operations: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            tunnel_manager: Some(Arc::new(crate::remote::TunnelManager::new())),
         }
     }
 
@@ -270,6 +273,7 @@ impl AppState {
             analytics_enabled_tx,
             update_quiescing: Arc::new(AtomicBool::new(false)),
             active_update_operations: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            tunnel_manager: None,
         }
     }
 
@@ -1531,6 +1535,8 @@ async fn dispatch_request(request: Request, state: &Arc<AppState>) -> Response {
         Request::SetAnalytics(req) => handlers::handle_set_analytics(req, state).await,
         Request::IsSafeToUpdate(req) => handlers::handle_is_safe_to_update(req, state).await,
         Request::PrepareForUpdate(req) => handlers::handle_prepare_for_update(req, state).await,
+        Request::Remote(req) => handlers::remote::handle_remote(req, state).await,
+        Request::Sync(req) => handlers::remote::handle_sync(req, state).await,
     }
 }
 

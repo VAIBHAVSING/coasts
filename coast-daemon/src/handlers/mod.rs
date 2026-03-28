@@ -319,6 +319,7 @@ pub mod mcp;
 pub mod ports;
 pub mod ps;
 pub mod rebuild;
+pub mod remote;
 pub mod rerun_extractors;
 pub mod restart_services;
 pub mod rm;
@@ -415,6 +416,9 @@ pub fn translate_error(e: &coast_core::error::CoastError, lang: &str) -> String 
         .to_string(),
         CoastError::Protocol { message, .. } => {
             t!("error.protocol", locale = lang, message = message).to_string()
+        }
+        CoastError::Remote { message } => {
+            t!("error.remote", locale = lang, message = message).to_string()
         }
     }
 }

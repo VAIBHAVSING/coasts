@@ -26,6 +26,7 @@ mod handlers;
 mod image_loader;
 #[allow(dead_code)]
 mod port_manager;
+mod remote;
 pub mod server;
 #[allow(dead_code)]
 mod shared_services;
