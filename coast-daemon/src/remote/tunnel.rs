@@ -24,6 +24,7 @@ const REMOTE_DAEMON_PORT: u16 = 31415;
 
 /// Configuration for establishing a tunnel.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TunnelConfig {
     /// Remote configuration
     pub remote: Remote,
@@ -47,8 +48,6 @@ struct TunnelProcess {
     child: Child,
     /// Local port this tunnel is bound to.
     local_port: u16,
-    /// Remote this tunnel connects to.
-    remote_name: String,
 }
 
 /// Result of a connect operation - tunnel state to persist.
@@ -209,7 +208,6 @@ impl TunnelManager {
                 TunnelProcess {
                     child,
                     local_port,
-                    remote_name: remote.name.clone(),
                 },
             );
         }
@@ -332,10 +330,9 @@ impl TunnelManager {
 
         if let Some(tunnel) = tunnels.get(remote_name) {
             // Try to connect to the local port
-            match tokio::net::TcpStream::connect(format!("127.0.0.1:{}", tunnel.local_port)).await {
-                Ok(_) => true,
-                Err(_) => false,
-            }
+            tokio::net::TcpStream::connect(format!("127.0.0.1:{}", tunnel.local_port))
+                .await
+                .is_ok()
         } else {
             false
         }
@@ -345,8 +342,8 @@ impl TunnelManager {
     pub async fn get_tunnel_statuses(&self) -> HashMap<String, TunnelStatus> {
         let tunnels = self.tunnels.read().await;
         tunnels
-            .iter()
-            .map(|(name, _)| (name.clone(), TunnelStatus::Connected))
+            .keys()
+            .map(|name| (name.clone(), TunnelStatus::Connected))
             .collect()
     }
 

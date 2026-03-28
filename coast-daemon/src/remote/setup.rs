@@ -22,6 +22,7 @@ pub type ProgressCallback = Box<dyn Fn(&str) + Send + Sync>;
 
 /// Setup status for tracking installation progress.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum SetupStatus {
     /// Starting setup process
     Starting,
@@ -60,6 +61,7 @@ impl RemoteSetup {
     }
 
     /// Create a new RemoteSetup instance with a progress callback.
+    #[allow(dead_code)]
     pub fn with_progress(progress: ProgressCallback) -> Self {
         Self {
             progress: Some(progress),
@@ -179,6 +181,7 @@ impl RemoteSetup {
     }
 
     /// Copy a file to the remote via SCP.
+    #[allow(dead_code)]
     async fn scp_to_remote(
         &self,
         remote: &Remote,
@@ -348,7 +351,7 @@ impl RemoteSetup {
         };
 
         // Determine download URL
-        let url = binary_url.map(|s| s.to_string()).unwrap_or_else(|| {
+        let url = binary_url.map(std::string::ToString::to_string).unwrap_or_else(|| {
             // Default to a placeholder - in production this would be a real release URL
             format!(
                 "https://github.com/anomalyco/coast/releases/latest/download/coastd-linux-{}",
@@ -458,6 +461,7 @@ WantedBy=multi-user.target
     }
 
     /// Stop the coastd service on the remote.
+    #[allow(dead_code)]
     pub async fn stop_service(&self, remote: &Remote) -> Result<()> {
         self.report("Stopping coastd service...");
 
@@ -472,6 +476,7 @@ WantedBy=multi-user.target
     }
 
     /// Restart the coastd service on the remote.
+    #[allow(dead_code)]
     pub async fn restart_service(&self, remote: &Remote) -> Result<()> {
         self.report("Restarting coastd service...");
 
@@ -486,6 +491,7 @@ WantedBy=multi-user.target
     }
 
     /// Get the coastd service status on the remote.
+    #[allow(dead_code)]
     pub async fn service_status(&self, remote: &Remote) -> Result<String> {
         match self
             .ssh_exec(
@@ -580,6 +586,7 @@ WantedBy=multi-user.target
     }
 
     /// Upgrade coastd on a remote VM.
+    #[allow(dead_code)]
     pub async fn upgrade(&self, remote: &Remote, binary_url: Option<&str>) -> Result<()> {
         info!(remote = %remote.name, "upgrading coastd");
         self.report("Upgrading coastd...");
@@ -607,6 +614,7 @@ WantedBy=multi-user.target
     }
 
     /// Uninstall coastd from a remote VM.
+    #[allow(dead_code)]
     pub async fn uninstall(&self, remote: &Remote) -> Result<()> {
         info!(remote = %remote.name, "uninstalling coastd");
         self.report("Uninstalling coastd...");

@@ -63,6 +63,7 @@ async fn handle_remote_add(req: RemoteAddRequest, state: &Arc<AppState>) -> Resp
     }
 }
 
+#[allow(clippy::cognitive_complexity)]
 async fn handle_remote_remove(req: RemoteRemoveRequest, state: &Arc<AppState>) -> Response {
     // First, disconnect any active tunnel
     if let Some(tunnel_manager) = state.tunnel_manager.as_ref() {
@@ -318,15 +319,12 @@ async fn handle_remote_connect(req: RemoteConnectRequest, state: &Arc<AppState>)
     };
 
     // Get or create tunnel manager
-    let tunnel_manager = match state.tunnel_manager.as_ref() {
-        Some(tm) => tm,
-        None => {
-            return Response::Remote(RemoteResponse::Connect(RemoteConnectResponse {
-                connected: false,
-                local_port: None,
-                message: "Tunnel manager not initialized".to_string(),
-            }));
-        }
+    let Some(tunnel_manager) = state.tunnel_manager.as_ref() else {
+        return Response::Remote(RemoteResponse::Connect(RemoteConnectResponse {
+            connected: false,
+            local_port: None,
+            message: "Tunnel manager not initialized".to_string(),
+        }));
     };
 
     // Establish connection
@@ -357,14 +355,11 @@ async fn handle_remote_connect(req: RemoteConnectRequest, state: &Arc<AppState>)
 }
 
 async fn handle_remote_disconnect(req: RemoteDisconnectRequest, state: &Arc<AppState>) -> Response {
-    let tunnel_manager = match state.tunnel_manager.as_ref() {
-        Some(tm) => tm,
-        None => {
-            return Response::Remote(RemoteResponse::Disconnect(RemoteDisconnectResponse {
-                disconnected: false,
-                message: "Tunnel manager not initialized".to_string(),
-            }));
-        }
+    let Some(tunnel_manager) = state.tunnel_manager.as_ref() else {
+        return Response::Remote(RemoteResponse::Disconnect(RemoteDisconnectResponse {
+            disconnected: false,
+            message: "Tunnel manager not initialized".to_string(),
+        }));
     };
 
     match tunnel_manager.disconnect(&req.name).await {
