@@ -351,13 +351,15 @@ impl RemoteSetup {
         };
 
         // Determine download URL
-        let url = binary_url.map(std::string::ToString::to_string).unwrap_or_else(|| {
-            // Default to a placeholder - in production this would be a real release URL
-            format!(
-                "https://github.com/anomalyco/coast/releases/latest/download/coastd-linux-{}",
-                arch_suffix
-            )
-        });
+        let url = binary_url
+            .map(std::string::ToString::to_string)
+            .unwrap_or_else(|| {
+                // Default to a placeholder - in production this would be a real release URL
+                format!(
+                    "https://github.com/anomalyco/coast/releases/latest/download/coastd-linux-{}",
+                    arch_suffix
+                )
+            });
 
         self.report(&format!("Downloading coastd from {}...", url));
 

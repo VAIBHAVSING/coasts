@@ -203,13 +203,7 @@ impl TunnelManager {
         // Store the tunnel process
         {
             let mut tunnels = self.tunnels.write().await;
-            tunnels.insert(
-                remote.name.clone(),
-                TunnelProcess {
-                    child,
-                    local_port,
-                },
-            );
+            tunnels.insert(remote.name.clone(), TunnelProcess { child, local_port });
         }
 
         // Build tunnel state for persistence
