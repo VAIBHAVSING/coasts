@@ -53,6 +53,8 @@ pub enum Commands {
     Update(commands::update::UpdateArgs),
     /// Manage remote VMs for remote development.
     Remote(commands::remote::RemoteArgs),
+    /// Manage file synchronization with remote VMs.
+    Sync(commands::sync::SyncArgs),
     /// List docs tree or print docs markdown content.
     Docs(commands::docs::DocsArgs),
     /// Search docs with hybrid semantic + keyword ranking.
@@ -259,6 +261,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Cert(args) => commands::cert::execute(&args).await,
         Commands::Update(args) => commands::update::execute(&args).await,
         Commands::Remote(args) => commands::remote::execute(&args).await,
+        Commands::Sync(args) => commands::sync::execute(&args).await,
         Commands::Docs(args) => commands::docs::execute(&args).await,
         Commands::SearchDocs(args) => commands::search_docs::execute(&args).await,
         Commands::InstallationPrompt(args) => commands::installation_prompt::execute(&args).await,

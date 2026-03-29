@@ -260,6 +260,68 @@ pub struct SyncResumeResponse {
     pub message: String,
 }
 
+/// Request to flush pending sync changes for a project.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncFlushRequest {
+    /// Project name
+    pub project: String,
+}
+
+/// Response after flushing sync.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncFlushResponse {
+    /// Whether flush was successful
+    pub flushed: bool,
+    /// Message describing the result
+    pub message: String,
+}
+
+/// Request to create a new sync session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncCreateRequest {
+    /// Project name
+    pub project: String,
+    /// Branch/worktree name
+    pub branch: String,
+    /// Remote name to sync to
+    pub remote_name: String,
+    /// Local path to sync (optional, defaults to project worktree)
+    pub local_path: Option<String>,
+}
+
+/// Response after creating sync session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncCreateResponse {
+    /// Whether creation was successful
+    pub created: bool,
+    /// Session name
+    pub session_name: Option<String>,
+    /// Message describing the result
+    pub message: String,
+}
+
+/// Request to terminate a sync session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncTerminateRequest {
+    /// Project name
+    pub project: String,
+}
+
+/// Response after terminating sync session.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SyncTerminateResponse {
+    /// Whether termination was successful
+    pub terminated: bool,
+    /// Message describing the result
+    pub message: String,
+}
+
 // ---------------------------------------------------------------------------
 // Unified Remote Request/Response
 // ---------------------------------------------------------------------------
@@ -317,6 +379,12 @@ pub enum SyncRequest {
     Pause(SyncPauseRequest),
     /// Resume sync for a project
     Resume(SyncResumeRequest),
+    /// Flush pending sync changes
+    Flush(SyncFlushRequest),
+    /// Create a new sync session
+    Create(SyncCreateRequest),
+    /// Terminate a sync session
+    Terminate(SyncTerminateRequest),
 }
 
 /// All sync-related responses.
@@ -330,4 +398,10 @@ pub enum SyncResponse {
     Pause(SyncPauseResponse),
     /// Response to Resume request
     Resume(SyncResumeResponse),
+    /// Response to Flush request
+    Flush(SyncFlushResponse),
+    /// Response to Create request
+    Create(SyncCreateResponse),
+    /// Response to Terminate request
+    Terminate(SyncTerminateResponse),
 }

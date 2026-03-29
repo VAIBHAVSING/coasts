@@ -183,6 +183,8 @@ pub struct AppState {
     pub active_update_operations: Arc<std::sync::Mutex<HashMap<uuid::Uuid, ActiveUpdateOperation>>>,
     /// SSH tunnel manager for remote daemon connections.
     pub tunnel_manager: Option<Arc<crate::remote::TunnelManager>>,
+    /// Mutagen sync manager for file synchronization with remote VMs.
+    pub mutagen_manager: Option<Arc<crate::remote::MutagenManager>>,
 }
 
 impl AppState {
@@ -238,6 +240,7 @@ impl AppState {
             update_quiescing: Arc::new(AtomicBool::new(false)),
             active_update_operations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             tunnel_manager: Some(Arc::new(crate::remote::TunnelManager::new())),
+            mutagen_manager: Some(Arc::new(crate::remote::MutagenManager::new())),
         }
     }
 
@@ -274,6 +277,7 @@ impl AppState {
             update_quiescing: Arc::new(AtomicBool::new(false)),
             active_update_operations: Arc::new(std::sync::Mutex::new(HashMap::new())),
             tunnel_manager: None,
+            mutagen_manager: None,
         }
     }
 

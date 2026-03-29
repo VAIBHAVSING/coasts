@@ -513,6 +513,9 @@ pub fn request_command_name(req: &Request) -> String {
                 SyncRequest::Status(_) => "sync/status",
                 SyncRequest::Pause(_) => "sync/pause",
                 SyncRequest::Resume(_) => "sync/resume",
+                SyncRequest::Flush(_) => "sync/flush",
+                SyncRequest::Create(_) => "sync/create",
+                SyncRequest::Terminate(_) => "sync/terminate",
             }
             .into()
         }
