@@ -1,11 +1,12 @@
 /// `coast remote` handlers — manage remote VMs for remote development.
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tracing::{error, info, warn};
 
-use crate::remote::RemoteSetup;
+use crate::remote::{MutagenManager, RemoteSetup};
 use crate::server::AppState;
-use crate::state::remotes::{Remote, TunnelStatus};
+use crate::state::remotes::{Remote, SyncStatus, TunnelStatus};
 use coast_core::protocol::*;
 
 /// Handle a RemoteRequest and return a RemoteResponse.
@@ -27,6 +28,9 @@ pub async fn handle_sync(req: SyncRequest, state: &Arc<AppState>) -> Response {
         SyncRequest::Status(r) => handle_sync_status(r, state).await,
         SyncRequest::Pause(r) => handle_sync_pause(r, state).await,
         SyncRequest::Resume(r) => handle_sync_resume(r, state).await,
+        SyncRequest::Flush(r) => handle_sync_flush(r, state).await,
+        SyncRequest::Create(r) => handle_sync_create(r, state).await,
+        SyncRequest::Terminate(r) => handle_sync_terminate(r, state).await,
     }
 }
 
@@ -396,16 +400,85 @@ async fn handle_remote_disconnect(req: RemoteDisconnectRequest, state: &Arc<AppS
 }
 
 // ---------------------------------------------------------------------------
-// Sync Handlers (stubs for now)
+// Sync Handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_sync_status(_req: SyncStatusRequest, state: &Arc<AppState>) -> Response {
-    // Get all sync sessions from the database
+async fn handle_sync_status(req: SyncStatusRequest, state: &Arc<AppState>) -> Response {
+    // If mutagen_manager is available, get live status from Mutagen
+    if let Some(mutagen_manager) = state.mutagen_manager.as_ref() {
+        match mutagen_manager.list_all_sessions().await {
+            Ok(mutagen_sessions) => {
+                // Also get database sessions for metadata
+                let db_sessions = {
+                    let db = state.db.lock().await;
+                    db.list_sync_sessions().unwrap_or_default()
+                };
+
+                // Merge Mutagen live status with database metadata
+                let session_infos: Vec<SyncSessionInfo> = if let Some(ref project) = req.project {
+                    // Filter by project
+                    mutagen_sessions
+                        .iter()
+                        .filter(|s| {
+                            s.name.as_ref().map_or(false, |n| n.contains(project))
+                        })
+                        .map(|s| {
+                            let db_session = db_sessions.iter().find(|ds| {
+                                MutagenManager::generate_session_name(&ds.project, "main", &ds.remote_name)
+                                    == s.name.clone().unwrap_or_default()
+                            });
+                            SyncSessionInfo {
+                                project: db_session.map(|ds| ds.project.clone()).unwrap_or_else(|| {
+                                    s.name.clone().unwrap_or_default()
+                                }),
+                                remote_name: db_session.map(|ds| ds.remote_name.clone()).unwrap_or_default(),
+                                local_path: db_session.map(|ds| ds.local_path.clone()).unwrap_or_default(),
+                                remote_path: db_session.map(|ds| ds.remote_path.clone()).unwrap_or_default(),
+                                status: s.status.clone().unwrap_or_else(|| "unknown".to_string()),
+                                last_sync_at: db_session.and_then(|ds| ds.last_sync_at.map(|t| t.to_rfc3339())),
+                            }
+                        })
+                        .collect()
+                } else {
+                    // Return all sessions
+                    mutagen_sessions
+                        .iter()
+                        .map(|s| {
+                            let db_session = db_sessions.iter().find(|ds| {
+                                MutagenManager::generate_session_name(&ds.project, "main", &ds.remote_name)
+                                    == s.name.clone().unwrap_or_default()
+                            });
+                            SyncSessionInfo {
+                                project: db_session.map(|ds| ds.project.clone()).unwrap_or_else(|| {
+                                    s.name.clone().unwrap_or_default()
+                                }),
+                                remote_name: db_session.map(|ds| ds.remote_name.clone()).unwrap_or_default(),
+                                local_path: db_session.map(|ds| ds.local_path.clone()).unwrap_or_default(),
+                                remote_path: db_session.map(|ds| ds.remote_path.clone()).unwrap_or_default(),
+                                status: s.status.clone().unwrap_or_else(|| "unknown".to_string()),
+                                last_sync_at: db_session.and_then(|ds| ds.last_sync_at.map(|t| t.to_rfc3339())),
+                            }
+                        })
+                        .collect()
+                };
+
+                return Response::Sync(SyncResponse::Status(SyncStatusResponse {
+                    sessions: session_infos,
+                }));
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to get Mutagen sessions, falling back to database");
+            }
+        }
+    }
+
+    // Fallback: Get sessions from database only
     let db = state.db.lock().await;
     match db.list_sync_sessions() {
         Ok(sessions) => {
             let session_infos: Vec<SyncSessionInfo> = sessions
                 .into_iter()
+                .filter(|s| req.project.as_ref().map_or(true, |p| &s.project == p))
                 .map(|s| SyncSessionInfo {
                     project: s.project,
                     remote_name: s.remote_name,
@@ -429,24 +502,314 @@ async fn handle_sync_status(_req: SyncStatusRequest, state: &Arc<AppState>) -> R
     }
 }
 
-async fn handle_sync_pause(req: SyncPauseRequest, _state: &Arc<AppState>) -> Response {
-    // TODO: Implement pause sync with Mutagen
-    Response::Sync(SyncResponse::Pause(SyncPauseResponse {
-        paused: false,
-        message: format!(
-            "Sync pause not yet implemented for project '{}'",
-            req.project
-        ),
-    }))
+async fn handle_sync_pause(req: SyncPauseRequest, state: &Arc<AppState>) -> Response {
+    let Some(mutagen_manager) = state.mutagen_manager.as_ref() else {
+        return Response::Sync(SyncResponse::Pause(SyncPauseResponse {
+            paused: false,
+            message: "Mutagen manager not initialized".to_string(),
+        }));
+    };
+
+    // Find the session for this project
+    let session = mutagen_manager.get_session_by_project(&req.project).await;
+
+    let session_name = match session {
+        Some(s) => s.session_name,
+        None => {
+            // Try to construct session name from database
+            let db = state.db.lock().await;
+            match db.get_sync_session(&req.project) {
+                Ok(Some(s)) => {
+                    MutagenManager::generate_session_name(&s.project, "main", &s.remote_name)
+                }
+                _ => {
+                    return Response::Sync(SyncResponse::Pause(SyncPauseResponse {
+                        paused: false,
+                        message: format!("No sync session found for project '{}'", req.project),
+                    }));
+                }
+            }
+        }
+    };
+
+    match mutagen_manager.pause_session(&session_name).await {
+        Ok(()) => {
+            // Update database status
+            let db = state.db.lock().await;
+            if let Err(e) = db.update_sync_session_status(&req.project, SyncStatus::Paused) {
+                warn!(project = %req.project, error = %e, "failed to update sync status in database");
+            }
+
+            info!(project = %req.project, session = %session_name, "sync session paused");
+            Response::Sync(SyncResponse::Pause(SyncPauseResponse {
+                paused: true,
+                message: format!("Sync paused for project '{}'", req.project),
+            }))
+        }
+        Err(e) => {
+            error!(project = %req.project, error = %e, "failed to pause sync session");
+            Response::Sync(SyncResponse::Pause(SyncPauseResponse {
+                paused: false,
+                message: format!("Failed to pause sync: {}", e),
+            }))
+        }
+    }
 }
 
-async fn handle_sync_resume(req: SyncResumeRequest, _state: &Arc<AppState>) -> Response {
-    // TODO: Implement resume sync with Mutagen
-    Response::Sync(SyncResponse::Resume(SyncResumeResponse {
-        resumed: false,
-        message: format!(
-            "Sync resume not yet implemented for project '{}'",
-            req.project
-        ),
-    }))
+async fn handle_sync_resume(req: SyncResumeRequest, state: &Arc<AppState>) -> Response {
+    let Some(mutagen_manager) = state.mutagen_manager.as_ref() else {
+        return Response::Sync(SyncResponse::Resume(SyncResumeResponse {
+            resumed: false,
+            message: "Mutagen manager not initialized".to_string(),
+        }));
+    };
+
+    // Find the session for this project
+    let session = mutagen_manager.get_session_by_project(&req.project).await;
+
+    let session_name = match session {
+        Some(s) => s.session_name,
+        None => {
+            // Try to construct session name from database
+            let db = state.db.lock().await;
+            match db.get_sync_session(&req.project) {
+                Ok(Some(s)) => {
+                    MutagenManager::generate_session_name(&s.project, "main", &s.remote_name)
+                }
+                _ => {
+                    return Response::Sync(SyncResponse::Resume(SyncResumeResponse {
+                        resumed: false,
+                        message: format!("No sync session found for project '{}'", req.project),
+                    }));
+                }
+            }
+        }
+    };
+
+    match mutagen_manager.resume_session(&session_name).await {
+        Ok(()) => {
+            // Update database status
+            let db = state.db.lock().await;
+            if let Err(e) = db.update_sync_session_status(&req.project, SyncStatus::Syncing) {
+                warn!(project = %req.project, error = %e, "failed to update sync status in database");
+            }
+
+            info!(project = %req.project, session = %session_name, "sync session resumed");
+            Response::Sync(SyncResponse::Resume(SyncResumeResponse {
+                resumed: true,
+                message: format!("Sync resumed for project '{}'", req.project),
+            }))
+        }
+        Err(e) => {
+            error!(project = %req.project, error = %e, "failed to resume sync session");
+            Response::Sync(SyncResponse::Resume(SyncResumeResponse {
+                resumed: false,
+                message: format!("Failed to resume sync: {}", e),
+            }))
+        }
+    }
+}
+
+async fn handle_sync_flush(req: SyncFlushRequest, state: &Arc<AppState>) -> Response {
+    let Some(mutagen_manager) = state.mutagen_manager.as_ref() else {
+        return Response::Sync(SyncResponse::Flush(SyncFlushResponse {
+            flushed: false,
+            message: "Mutagen manager not initialized".to_string(),
+        }));
+    };
+
+    // Find the session for this project
+    let session = mutagen_manager.get_session_by_project(&req.project).await;
+
+    let session_name = match session {
+        Some(s) => s.session_name,
+        None => {
+            // Try to construct session name from database
+            let db = state.db.lock().await;
+            match db.get_sync_session(&req.project) {
+                Ok(Some(s)) => {
+                    MutagenManager::generate_session_name(&s.project, "main", &s.remote_name)
+                }
+                _ => {
+                    return Response::Sync(SyncResponse::Flush(SyncFlushResponse {
+                        flushed: false,
+                        message: format!("No sync session found for project '{}'", req.project),
+                    }));
+                }
+            }
+        }
+    };
+
+    match mutagen_manager.flush_session(&session_name).await {
+        Ok(()) => {
+            // Update last_sync_at in database
+            let db = state.db.lock().await;
+            if let Err(e) = db.update_sync_last_sync_at(&req.project) {
+                warn!(project = %req.project, error = %e, "failed to update last_sync_at in database");
+            }
+
+            info!(project = %req.project, session = %session_name, "sync session flushed");
+            Response::Sync(SyncResponse::Flush(SyncFlushResponse {
+                flushed: true,
+                message: format!("Sync flushed for project '{}'", req.project),
+            }))
+        }
+        Err(e) => {
+            error!(project = %req.project, error = %e, "failed to flush sync session");
+            Response::Sync(SyncResponse::Flush(SyncFlushResponse {
+                flushed: false,
+                message: format!("Failed to flush sync: {}", e),
+            }))
+        }
+    }
+}
+
+async fn handle_sync_create(req: SyncCreateRequest, state: &Arc<AppState>) -> Response {
+    let Some(mutagen_manager) = state.mutagen_manager.as_ref() else {
+        return Response::Sync(SyncResponse::Create(SyncCreateResponse {
+            created: false,
+            session_name: None,
+            message: "Mutagen manager not initialized".to_string(),
+        }));
+    };
+
+    // Get the remote configuration
+    let remote = {
+        let db = state.db.lock().await;
+        match db.get_remote(&req.remote_name) {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                return Response::Sync(SyncResponse::Create(SyncCreateResponse {
+                    created: false,
+                    session_name: None,
+                    message: format!("Remote '{}' not found", req.remote_name),
+                }));
+            }
+            Err(e) => {
+                return Response::Sync(SyncResponse::Create(SyncCreateResponse {
+                    created: false,
+                    session_name: None,
+                    message: format!("Failed to get remote: {}", e),
+                }));
+            }
+        }
+    };
+
+    // Determine local path - must be provided explicitly
+    let local_path = match req.local_path {
+        Some(path) => PathBuf::from(path),
+        None => {
+            return Response::Sync(SyncResponse::Create(SyncCreateResponse {
+                created: false,
+                session_name: None,
+                message: format!(
+                    "local_path is required for sync create. Specify the path to sync for project '{}'.",
+                    req.project
+                ),
+            }));
+        }
+    };
+
+    // Verify local path exists
+    if !local_path.exists() {
+        return Response::Sync(SyncResponse::Create(SyncCreateResponse {
+            created: false,
+            session_name: None,
+            message: format!("Local path '{}' does not exist", local_path.display()),
+        }));
+    }
+
+    // Create the sync session
+    match mutagen_manager
+        .create_session(&req.project, &req.branch, &remote, &local_path)
+        .await
+    {
+        Ok(result) => {
+            // Persist to database
+            let db = state.db.lock().await;
+            if let Err(e) = db.upsert_sync_session(&result.db_session) {
+                warn!(project = %req.project, error = %e, "failed to persist sync session to database");
+            }
+
+            info!(
+                project = %req.project,
+                branch = %req.branch,
+                remote = %req.remote_name,
+                session = %result.session.session_name,
+                "sync session created"
+            );
+
+            Response::Sync(SyncResponse::Create(SyncCreateResponse {
+                created: true,
+                session_name: Some(result.session.session_name),
+                message: format!(
+                    "Sync session created: {} → {}",
+                    local_path.display(),
+                    result.session.remote_path
+                ),
+            }))
+        }
+        Err(e) => {
+            error!(project = %req.project, error = %e, "failed to create sync session");
+            Response::Sync(SyncResponse::Create(SyncCreateResponse {
+                created: false,
+                session_name: None,
+                message: format!("Failed to create sync session: {}", e),
+            }))
+        }
+    }
+}
+
+async fn handle_sync_terminate(req: SyncTerminateRequest, state: &Arc<AppState>) -> Response {
+    let Some(mutagen_manager) = state.mutagen_manager.as_ref() else {
+        return Response::Sync(SyncResponse::Terminate(SyncTerminateResponse {
+            terminated: false,
+            message: "Mutagen manager not initialized".to_string(),
+        }));
+    };
+
+    // Find the session for this project
+    let session = mutagen_manager.get_session_by_project(&req.project).await;
+
+    let session_name = match session {
+        Some(s) => s.session_name,
+        None => {
+            // Try to construct session name from database
+            let db = state.db.lock().await;
+            match db.get_sync_session(&req.project) {
+                Ok(Some(s)) => {
+                    MutagenManager::generate_session_name(&s.project, "main", &s.remote_name)
+                }
+                _ => {
+                    return Response::Sync(SyncResponse::Terminate(SyncTerminateResponse {
+                        terminated: false,
+                        message: format!("No sync session found for project '{}'", req.project),
+                    }));
+                }
+            }
+        }
+    };
+
+    match mutagen_manager.terminate_session(&session_name).await {
+        Ok(()) => {
+            // Remove from database
+            let db = state.db.lock().await;
+            if let Err(e) = db.delete_sync_session(&req.project) {
+                warn!(project = %req.project, error = %e, "failed to delete sync session from database");
+            }
+
+            info!(project = %req.project, session = %session_name, "sync session terminated");
+            Response::Sync(SyncResponse::Terminate(SyncTerminateResponse {
+                terminated: true,
+                message: format!("Sync session terminated for project '{}'", req.project),
+            }))
+        }
+        Err(e) => {
+            error!(project = %req.project, error = %e, "failed to terminate sync session");
+            Response::Sync(SyncResponse::Terminate(SyncTerminateResponse {
+                terminated: false,
+                message: format!("Failed to terminate sync session: {}", e),
+            }))
+        }
+    }
 }

@@ -38,6 +38,7 @@ pub mod shared;
 pub mod skills_prompt;
 pub mod start;
 pub mod stop;
+pub mod sync;
 pub mod ui;
 pub mod unassign;
 pub mod update;

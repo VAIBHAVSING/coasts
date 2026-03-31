@@ -123,6 +123,7 @@ mod compose_context_tests {
             worktree_name: None,
             build_id: None,
             coastfile_type: None,
+            remote_name: None,
         };
         db.insert_instance(&instance).unwrap();
         db.insert_port_allocation(
@@ -165,6 +166,7 @@ mod compose_context_tests {
             worktree_name: None,
             build_id: None,
             coastfile_type: None,
+            remote_name: None,
         };
         db.insert_instance(&instance).unwrap();
 
@@ -198,6 +200,7 @@ mod compose_context_tests {
             worktree_name: None,
             build_id: None,
             coastfile_type: None,
+            remote_name: None,
         };
         db.insert_instance(&instance).unwrap();
         db.insert_port_allocation(
@@ -242,6 +245,7 @@ mod compose_context_tests {
             worktree_name: None,
             build_id: None,
             coastfile_type: None,
+            remote_name: None,
         };
         db.insert_instance(&instance).unwrap();
         db.insert_port_allocation(

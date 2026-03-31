@@ -804,6 +804,113 @@ impl StateDb {
 
         Ok(sessions)
     }
+
+    /// Update sync session status.
+    #[instrument(skip(self))]
+    pub fn update_sync_session_status(&self, project: &str, status: SyncStatus) -> Result<()> {
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE sync_sessions SET status = ?2 WHERE project = ?1",
+                params![project, status.as_str()],
+            )
+            .map_err(|e| CoastError::State {
+                message: format!("failed to update sync session status for '{project}': {e}"),
+                source: Some(Box::new(e)),
+            })?;
+
+        if rows == 0 {
+            return Err(CoastError::State {
+                message: format!("sync session for project '{}' not found", project),
+                source: None,
+            });
+        }
+
+        debug!(project = %project, status = ?status, "updated sync session status");
+        Ok(())
+    }
+
+    /// Update last sync timestamp.
+    #[instrument(skip(self))]
+    pub fn update_sync_last_sync_at(&self, project: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE sync_sessions SET last_sync_at = ?2 WHERE project = ?1",
+                params![project, now],
+            )
+            .map_err(|e| CoastError::State {
+                message: format!("failed to update sync last_sync_at for '{project}': {e}"),
+                source: Some(Box::new(e)),
+            })?;
+
+        if rows == 0 {
+            return Err(CoastError::State {
+                message: format!("sync session for project '{}' not found", project),
+                source: None,
+            });
+        }
+
+        debug!(project = %project, "updated sync last_sync_at");
+        Ok(())
+    }
+
+    /// List sync sessions for a specific remote.
+    #[instrument(skip(self))]
+    pub fn list_sync_sessions_for_remote(&self, remote_name: &str) -> Result<Vec<SyncSession>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT project, remote_name, mutagen_session_id, local_path, remote_path, status, last_sync_at, created_at
+                 FROM sync_sessions WHERE remote_name = ?1 ORDER BY project ASC",
+            )
+            .map_err(|e| CoastError::State {
+                message: format!("failed to prepare sync_sessions query: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+
+        let rows = stmt
+            .query_map(params![remote_name], |row| {
+                let status_str: String = row.get(5)?;
+                let last_sync_at_str: Option<String> = row.get(6)?;
+                let created_at_str: String = row.get(7)?;
+
+                let last_sync_at = last_sync_at_str.and_then(|s| {
+                    DateTime::parse_from_rfc3339(&s)
+                        .map(|dt| dt.with_timezone(&Utc))
+                        .ok()
+                });
+                let created_at = DateTime::parse_from_rfc3339(&created_at_str)
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now());
+
+                Ok(SyncSession {
+                    project: row.get(0)?,
+                    remote_name: row.get(1)?,
+                    mutagen_session_id: row.get(2)?,
+                    local_path: row.get(3)?,
+                    remote_path: row.get(4)?,
+                    status: SyncStatus::from_str(&status_str),
+                    last_sync_at,
+                    created_at,
+                })
+            })
+            .map_err(|e| CoastError::State {
+                message: format!("failed to query sync_sessions for remote: {e}"),
+                source: Some(Box::new(e)),
+            })?;
+
+        let mut sessions = Vec::new();
+        for row in rows {
+            sessions.push(row.map_err(|e| CoastError::State {
+                message: format!("failed to read sync_session row: {e}"),
+                source: Some(Box::new(e)),
+            })?);
+        }
+
+        Ok(sessions)
+    }
 }
 
 // ---------------------------------------------------------------------------
