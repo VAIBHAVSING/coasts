@@ -599,19 +599,93 @@ async fn handle_connection(stream: tokio::net::UnixStream, state: Arc<AppState>)
         track(result.is_ok(), base_metadata.clone());
         return result;
     }
-    if let Request::Logs(req) = request {
-        if req.follow {
-            let result = handle_logs_streaming(req, &state, &mut writer).await;
-            track(result.is_ok(), base_metadata.clone());
-            return result;
+
+    // Handle exec requests - check if instance is remote
+    if let Request::Exec(ref req) = request {
+        // Check if this instance is running on a remote
+        match get_instance_remote_route(&state, &req.project, &req.name).await {
+            Ok(Some(route)) => {
+                // Forward to remote daemon
+                let remote_request = Request::Exec(req.clone());
+                let response = match forward_to_remote(&remote_request, &route).await {
+                    Ok(resp) => resp,
+                    Err(e) => Response::Error(ErrorResponse {
+                        error: format!("Remote exec failed: {}", e),
+                    }),
+                };
+                let success = !matches!(&response, Response::Error(_));
+                let mut metadata = base_metadata.clone();
+                metadata.extend(analytics::response_metadata(&request_for_meta, &response));
+                write_response(&mut writer, &response).await?;
+                track(success, metadata);
+                return Ok(());
+            }
+            Ok(None) => {
+                // Local instance - fall through to normal dispatch
+            }
+            Err(e) => {
+                let response = Response::Error(ErrorResponse {
+                    error: e.to_string(),
+                });
+                write_response(&mut writer, &response).await?;
+                track(false, base_metadata.clone());
+                return Ok(());
+            }
         }
-        let response = handlers::handle_logs(req, &state).await;
-        let success = !matches!(&response, Response::Error(_));
-        let mut metadata = base_metadata.clone();
-        metadata.extend(analytics::response_metadata(&request_for_meta, &response));
-        write_response(&mut writer, &response).await?;
-        track(success, metadata);
-        return Ok(());
+    }
+
+    // Handle logs requests - check if instance is remote
+    if let Request::Logs(req) = request {
+        // Check if this instance is running on a remote
+        match get_instance_remote_route(&state, &req.project, &req.name).await {
+            Ok(Some(route)) => {
+                // Forward to remote daemon
+                if req.follow {
+                    // Streaming logs
+                    let result = forward_logs_streaming_to_remote(req, &route, &mut writer).await;
+                    track(result.is_ok(), base_metadata.clone());
+                    return result;
+                } else {
+                    // Non-streaming logs
+                    let remote_request = Request::Logs(req);
+                    let response = match forward_to_remote(&remote_request, &route).await {
+                        Ok(resp) => resp,
+                        Err(e) => Response::Error(ErrorResponse {
+                            error: format!("Remote logs failed: {}", e),
+                        }),
+                    };
+                    let success = !matches!(&response, Response::Error(_));
+                    let mut metadata = base_metadata.clone();
+                    metadata.extend(analytics::response_metadata(&request_for_meta, &response));
+                    write_response(&mut writer, &response).await?;
+                    track(success, metadata);
+                    return Ok(());
+                }
+            }
+            Ok(None) => {
+                // Local instance - use local handler
+                if req.follow {
+                    let result = handle_logs_streaming(req, &state, &mut writer).await;
+                    track(result.is_ok(), base_metadata.clone());
+                    return result;
+                }
+                let response = handlers::handle_logs(req, &state).await;
+                let success = !matches!(&response, Response::Error(_));
+                let mut metadata = base_metadata.clone();
+                metadata.extend(analytics::response_metadata(&request_for_meta, &response));
+                write_response(&mut writer, &response).await?;
+                track(success, metadata);
+                return Ok(());
+            }
+            Err(e) => {
+                let response = Response::Error(ErrorResponse {
+                    error: e.to_string(),
+                });
+                write_response(&mut writer, &response).await?;
+                track(false, base_metadata.clone());
+                return Ok(());
+            }
+        }
     }
 
     let response = dispatch_request(request, &state).await;
@@ -825,7 +899,7 @@ async fn handle_run_streaming(
         ensure_synced(state, &req.project).await?;
 
         // Forward to remote daemon
-        return forward_run_to_remote(req, &route, writer).await;
+        return forward_run_to_remote(req, &route, state, writer).await;
     }
 
     // Local execution
@@ -855,6 +929,7 @@ async fn handle_run_streaming(
             worktree_name: None,
             build_id: req.build_id.clone(),
             coastfile_type: req.coastfile_type.clone(),
+            remote_name: None,
         };
         if let Err(e) = db.insert_instance(&enqueued_inst) {
             let resp = Response::Error(ErrorResponse {
@@ -1581,6 +1656,63 @@ async fn get_remote_route(state: &AppState, project: &str) -> Result<Option<Remo
     }))
 }
 
+/// Check if an instance should be routed to a remote daemon based on where it's running.
+///
+/// This differs from `get_remote_route()` which checks project mode. This function
+/// checks where the specific instance is actually running, based on the `remote_name`
+/// field stored when the instance was created.
+///
+/// Returns `Some(RemoteRoute)` if the instance is running on a remote and the tunnel
+/// is connected, otherwise `None` for local execution.
+async fn get_instance_remote_route(
+    state: &AppState,
+    project: &str,
+    name: &str,
+) -> Result<Option<RemoteRoute>> {
+    // Get instance from database
+    let remote_name = {
+        let db = state.db.lock().await;
+        let instance = db.get_instance(project, name)?;
+        let instance = instance.ok_or_else(|| CoastError::InstanceNotFound {
+            name: name.to_string(),
+            project: project.to_string(),
+        })?;
+        instance.remote_name
+    };
+
+    let Some(remote_name) = remote_name else {
+        // Instance is running locally
+        return Ok(None);
+    };
+
+    // Check if tunnel is connected
+    let Some(tunnel_manager) = &state.tunnel_manager else {
+        return Err(CoastError::state("tunnel manager not initialized"));
+    };
+
+    let Some(tunnel_port) = tunnel_manager.get_tunnel_port(&remote_name).await else {
+        // Tunnel not connected - return helpful error
+        return Err(CoastError::state(format!(
+            "instance '{}' is running on remote '{}' but tunnel is not connected. \
+             Run 'coast remote connect {}' first.",
+            name, remote_name, remote_name
+        )));
+    };
+
+    info!(
+        project = %project,
+        instance = %name,
+        remote = %remote_name,
+        tunnel_port = tunnel_port,
+        "routing instance request to remote daemon"
+    );
+
+    Ok(Some(RemoteRoute {
+        remote_name,
+        tunnel_port,
+    }))
+}
+
 /// Ensure Mutagen sync is active and flushed before remote operations.
 ///
 /// This triggers a flush to ensure the latest local changes are synced
@@ -1648,11 +1780,18 @@ async fn forward_build_to_remote(
 }
 
 /// Forward a run request to a remote daemon and proxy responses back.
+///
+/// Creates a local "shadow" instance record with `remote_name` set so that
+/// future exec/logs requests can be routed to the correct remote.
 async fn forward_run_to_remote(
     req: coast_core::protocol::RunRequest,
     route: &RemoteRoute,
+    state: &Arc<AppState>,
     writer: &mut tokio::net::unix::OwnedWriteHalf,
 ) -> Result<()> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
     info!(
         remote = %route.remote_name,
         project = %req.project,
@@ -1660,18 +1799,172 @@ async fn forward_run_to_remote(
         "forwarding run request to remote daemon"
     );
 
-    let request = Request::Run(req);
+    // Create a shadow instance record locally to track that this instance
+    // is running on a remote. We create it in Enqueued status initially.
+    let shadow_instance = coast_core::types::CoastInstance {
+        name: req.name.clone(),
+        project: req.project.clone(),
+        status: coast_core::types::InstanceStatus::Enqueued,
+        branch: req.branch.clone(),
+        commit_sha: req.commit_sha.clone(),
+        container_id: None,
+        runtime: coast_core::types::RuntimeType::Dind,
+        created_at: chrono::Utc::now(),
+        worktree_name: req.worktree.clone(),
+        build_id: req.build_id.clone(),
+        coastfile_type: req.coastfile_type.clone(),
+        remote_name: Some(route.remote_name.clone()),
+    };
 
-    match forward_streaming_to_remote(&request, route, writer).await {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Write error response
-            let error_response = Response::Error(ErrorResponse {
-                error: format!("Remote run failed: {}", e),
+    {
+        let db = state.db.lock().await;
+        if let Err(e) = db.insert_instance(&shadow_instance) {
+            let resp = Response::Error(ErrorResponse {
+                error: e.to_string(),
             });
-            write_response(writer, &error_response).await
+            return write_response(writer, &resp).await;
         }
     }
+
+    // Connect to remote and forward the request
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], route.tunnel_port));
+    debug!(remote = %route.remote_name, addr = %addr, "connecting to remote daemon");
+
+    let stream = match TcpStream::connect(addr).await {
+        Ok(s) => s,
+        Err(e) => {
+            // Clean up shadow instance on connection failure
+            let db = state.db.lock().await;
+            let _ = db.delete_instance(&req.project, &req.name);
+            let error = format!(
+                "failed to connect to remote daemon '{}' at {}: {}",
+                route.remote_name, addr, e
+            );
+            let resp = Response::Error(ErrorResponse { error });
+            return write_response(writer, &resp).await;
+        }
+    };
+
+    let (reader, mut remote_writer) = stream.into_split();
+
+    // Encode and send request to remote
+    let request = Request::Run(req.clone());
+    let encoded = match protocol::encode_request(&request) {
+        Ok(e) => e,
+        Err(e) => {
+            let db = state.db.lock().await;
+            let _ = db.delete_instance(&req.project, &req.name);
+            let resp = Response::Error(ErrorResponse {
+                error: e.to_string(),
+            });
+            return write_response(writer, &resp).await;
+        }
+    };
+
+    if let Err(e) = remote_writer.write_all(&encoded).await {
+        let db = state.db.lock().await;
+        let _ = db.delete_instance(&req.project, &req.name);
+        let resp = Response::Error(ErrorResponse {
+            error: format!("failed to send request to remote daemon: {}", e),
+        });
+        return write_response(writer, &resp).await;
+    }
+
+    if let Err(e) = remote_writer.shutdown().await {
+        let db = state.db.lock().await;
+        let _ = db.delete_instance(&req.project, &req.name);
+        let resp = Response::Error(ErrorResponse {
+            error: format!("failed to flush request to remote daemon: {}", e),
+        });
+        return write_response(writer, &resp).await;
+    }
+
+    // Read responses from remote and proxy to local client
+    let mut buf_reader = BufReader::new(reader);
+    let mut line = String::new();
+    let mut run_succeeded = false;
+
+    loop {
+        line.clear();
+        let bytes_read = match buf_reader.read_line(&mut line).await {
+            Ok(n) => n,
+            Err(e) => {
+                let db = state.db.lock().await;
+                let _ = db.delete_instance(&req.project, &req.name);
+                let resp = Response::Error(ErrorResponse {
+                    error: format!("failed to read response from remote daemon: {}", e),
+                });
+                return write_response(writer, &resp).await;
+            }
+        };
+
+        if bytes_read == 0 {
+            let db = state.db.lock().await;
+            let _ = db.delete_instance(&req.project, &req.name);
+            let resp = Response::Error(ErrorResponse {
+                error: "remote daemon closed connection unexpectedly".to_string(),
+            });
+            return write_response(writer, &resp).await;
+        }
+
+        // Decode the response to check if it's final
+        let response = match protocol::decode_response(line.trim_end().as_bytes()) {
+            Ok(r) => r,
+            Err(e) => {
+                let db = state.db.lock().await;
+                let _ = db.delete_instance(&req.project, &req.name);
+                let resp = Response::Error(ErrorResponse {
+                    error: e.to_string(),
+                });
+                return write_response(writer, &resp).await;
+            }
+        };
+
+        // Check if this is a progress response or final
+        let is_final = !matches!(
+            response,
+            Response::BuildProgress(_) | Response::RunProgress(_) | Response::LogsProgress(_)
+        );
+
+        // Track if the final response is a success
+        if is_final {
+            run_succeeded = matches!(&response, Response::Run(_));
+        }
+
+        // Proxy the response to local client
+        write_response(writer, &response).await?;
+
+        if is_final {
+            debug!(remote = %route.remote_name, "received final response from remote daemon");
+            break;
+        }
+    }
+
+    // If the run succeeded, update the shadow instance to Running status
+    // If it failed, delete the shadow instance
+    {
+        let db = state.db.lock().await;
+        if run_succeeded {
+            // Update shadow instance to Running status
+            if let Err(e) = db.update_instance_status(
+                &req.project,
+                &req.name,
+                &coast_core::types::InstanceStatus::Running,
+            ) {
+                warn!(
+                    project = %req.project,
+                    instance = %req.name,
+                    error = %e,
+                    "failed to update shadow instance status"
+                );
+            }
+        } else {
+            // Delete the shadow instance on failure
+            let _ = db.delete_instance(&req.project, &req.name);
+        }
+    }
+
+    Ok(())
 }
 
 /// Generic function to forward a streaming request to a remote daemon.
@@ -1748,6 +2041,73 @@ async fn forward_streaming_to_remote(
     }
 
     Ok(())
+}
+
+/// Forward a non-streaming request to a remote daemon and return the response.
+///
+/// This is used for requests like exec and logs (non-follow mode) that
+/// expect a single response rather than a stream of progress updates.
+async fn forward_to_remote(request: &Request, route: &RemoteRoute) -> Result<Response> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::net::TcpStream;
+
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], route.tunnel_port));
+    debug!(remote = %route.remote_name, addr = %addr, "connecting to remote daemon");
+
+    let stream = TcpStream::connect(addr).await.map_err(|e| CoastError::Io {
+        message: format!(
+            "failed to connect to remote daemon '{}' at {}: {}",
+            route.remote_name, addr, e
+        ),
+        path: std::path::PathBuf::new(),
+        source: Some(e),
+    })?;
+
+    let (reader, mut remote_writer) = stream.into_split();
+
+    // Encode and send request to remote
+    let encoded = protocol::encode_request(request)?;
+    remote_writer.write_all(&encoded).await.map_err(|e| CoastError::Io {
+        message: format!("failed to send request to remote daemon: {}", e),
+        path: std::path::PathBuf::new(),
+        source: Some(e),
+    })?;
+    remote_writer.shutdown().await.map_err(|e| CoastError::Io {
+        message: format!("failed to flush request to remote daemon: {}", e),
+        path: std::path::PathBuf::new(),
+        source: Some(e),
+    })?;
+
+    // Read single response
+    let mut buf_reader = BufReader::new(reader);
+    let mut line = String::new();
+    buf_reader.read_line(&mut line).await.map_err(|e| CoastError::Io {
+        message: format!("failed to read response from remote daemon: {}", e),
+        path: std::path::PathBuf::new(),
+        source: Some(e),
+    })?;
+
+    if line.is_empty() {
+        return Err(CoastError::state("remote daemon closed connection unexpectedly"));
+    }
+
+    let response = protocol::decode_response(line.trim_end().as_bytes())?;
+    debug!(remote = %route.remote_name, "received response from remote daemon");
+
+    Ok(response)
+}
+
+/// Forward a streaming logs request to a remote daemon.
+///
+/// This wraps the LogsRequest as a Request::Logs and uses the general
+/// streaming forwarding logic which handles LogsProgress responses.
+async fn forward_logs_streaming_to_remote(
+    req: coast_core::protocol::LogsRequest,
+    route: &RemoteRoute,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> Result<()> {
+    let request = Request::Logs(req);
+    forward_streaming_to_remote(&request, route, writer).await
 }
 
 /// Dispatch a decoded request to the appropriate handler.
@@ -1989,6 +2349,7 @@ mod tests {
                 worktree_name: None,
                 build_id: None,
                 coastfile_type: None,
+                remote_name: None,
             };
             db.insert_instance(&inst).unwrap();
         }

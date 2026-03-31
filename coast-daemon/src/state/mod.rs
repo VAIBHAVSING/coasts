@@ -215,6 +215,7 @@ impl StateDb {
         self.migrate_add_agent_shell_local_id()?;
         self.migrate_add_port_is_primary()?;
         self.migrate_preferred_language_to_user_config()?;
+        self.migrate_add_instance_remote_name()?;
 
         Ok(())
     }
@@ -389,6 +390,26 @@ impl StateDb {
         }
         Ok(())
     }
+
+    /// Migration: add `remote_name` column to the instances table if it doesn't exist.
+    ///
+    /// This column tracks which remote VM an instance is running on (None = local).
+    fn migrate_add_instance_remote_name(&self) -> Result<()> {
+        let has_column = self
+            .conn
+            .prepare("SELECT remote_name FROM instances LIMIT 0")
+            .is_ok();
+        if !has_column {
+            self.conn
+                .execute_batch("ALTER TABLE instances ADD COLUMN remote_name TEXT;")
+                .map_err(|e| CoastError::State {
+                    message: format!("failed to add remote_name column to instances: {e}"),
+                    source: Some(Box::new(e)),
+                })?;
+            debug!("added remote_name column to instances table");
+        }
+        Ok(())
+    }
 }
 
 /// Check if a rusqlite error is a UNIQUE constraint violation.
@@ -430,6 +451,7 @@ pub(crate) mod test_helpers {
             worktree_name: None,
             build_id: None,
             coastfile_type: None,
+            remote_name: None,
         }
     }
 
